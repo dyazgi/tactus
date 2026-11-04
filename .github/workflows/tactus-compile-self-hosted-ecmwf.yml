@@ -88,6 +88,7 @@ jobs:
           fi
           if ! command -v poetry >/dev/null 2>&1; then
             echo "poetry not found on PATH - installing it into the user Python environment"
+            mkdir -p "$HOME/.local/bin"
             python3 -m pip install --user poetry
             echo "$HOME/.local/bin" >> "$GITHUB_PATH"
             export PATH="$HOME/.local/bin:$PATH"
@@ -112,7 +113,7 @@ jobs:
         # ci_status.txt (and anything else worth keeping) lives under
         # @CASEDIR@ on HPC scratch, not under the runner's local checkout -
         # see run-compile's artifact_paths output.
-        if: always() && github.event.inputs.dry_run != 'true'
+        if: always() && github.event.inputs.dry_run != 'true' && steps.compile.outputs.artifact_paths != ''
         uses: actions/upload-artifact@v4
         with:
           name: tactus-compile-${{ github.run_id }}

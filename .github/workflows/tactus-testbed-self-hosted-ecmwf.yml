@@ -102,6 +102,7 @@ jobs:
           fi
           if ! command -v poetry >/dev/null 2>&1; then
             echo "poetry not found on PATH - installing it into the user Python environment"
+            mkdir -p "$HOME/.local/bin"
             python3 -m pip install --user poetry
             echo "$HOME/.local/bin" >> "$GITHUB_PATH"
             export PATH="$HOME/.local/bin:$PATH"
@@ -124,7 +125,7 @@ jobs:
           dry_run: "false"
 
       - name: Upload compile logs
-        if: always() && steps.resolve.outputs.should_compile == 'true'
+        if: always() && steps.resolve.outputs.should_compile == 'true' && steps.compile.outputs.artifact_paths != ''
         uses: actions/upload-artifact@v4
         with:
           name: tactus-testbed-compile-${{ github.run_id }}
@@ -152,7 +153,7 @@ jobs:
         # @CASEDIR@ on HPC scratch, NOT under test_dir (which only ever holds
         # the generated *.toml configs on the runner's own checkout) - glob
         # against run-testbed's artifact_paths output instead of test_dir.
-        if: always()
+        if: always() && steps.testbed.outputs.artifact_paths != ''
         uses: actions/upload-artifact@v4
         with:
           name: tactus-testbed-${{ github.run_id }}
