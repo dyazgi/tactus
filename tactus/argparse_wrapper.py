@@ -295,6 +295,17 @@ def get_args_parser(program_name=GeneralConstants.PACKAGE_NAME):
         required=False,
         default="develop",
     )
+    parser_compile.add_argument(
+        "extra_config_mods",
+        help=(
+            "Additional configuration modification files, applied after this "
+            "command's own @HOST@.toml/compile_suite.toml modifications "
+            "(e.g. modifications/ci_atos_bologna.toml for CI runs)"
+        ),
+        nargs="*",
+        type=Path,
+        default=None,
+    )
     add_keep_def_file(
         parser_compile, help_message="Keep suite definition file in case of submission"
     )

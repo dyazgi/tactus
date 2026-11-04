@@ -62,7 +62,7 @@
   Repository = "https://github.com/ACCORD-NWP/tactus"
 
 [project.scripts]
-  tactus = "tactus.__main__:main"
+  tactus = "tactus.__main__:cli"
 
 [dependency-groups]
   dev = ["pre-commit>=3.0.4", "ruff (>=0.15.10,<0.16.0)"]

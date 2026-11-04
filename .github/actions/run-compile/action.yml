@@ -1,0 +1,51 @@
+name: Run tactus compile
+description: Runs 'tactus compile' for one IAL tag and reports the result to GitHub
+
+inputs:
+  ial_tag:
+    description: IAL git tag/branch to compile
+    required: true
+  dry_run:
+    description: Only generate the compile config, do not submit (maps to 'tactus compile -d')
+    required: false
+    default: "false"
+
+outputs:
+  config_file:
+    description: Path to the generated compile config.toml
+    value: ${{ steps.run.outputs.config_file }}
+  status:
+    description: PASS or FAIL
+    value: ${{ steps.summary.outputs.status }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      name: Submit compile suite
+      shell: bash
+      run: |
+        set -euo pipefail
+        config_file="compile_${{ inputs.ial_tag }}.toml"
+        dry_flag=""
+        if [ "${{ inputs.dry_run }}" = "true" ]; then
+          dry_flag="-d"
+        fi
+        poetry run tactus compile --ial-tag "${{ inputs.ial_tag }}" $dry_flag -o "$config_file" \
+          tactus/data/config_files/modifications/ci_atos_bologna.toml
+        echo "config_file=$config_file" >> "$GITHUB_OUTPUT"
+
+    - id: summary
+      name: Follow suite and summarize
+      if: ${{ inputs.dry_run != 'true' }}
+      shell: bash
+      run: |
+        set -o pipefail
+        poetry run python scripts/ci/monitor_suite.py \
+          --mode compile \
+          --config "${{ steps.run.outputs.config_file }}" \
+          --poll-interval-seconds "${{ env.TACTUS_POLL_INTERVAL_SECONDS || '60' }}" \
+          --timeout-minutes "${{ env.TACTUS_SUITE_TIMEOUT_MINUTES || '180' }}"
+        rc=$?
+        echo "status=$([ $rc -eq 0 ] && echo PASS || echo FAIL)" >> "$GITHUB_OUTPUT"
+        exit $rc

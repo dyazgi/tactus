@@ -1,0 +1,81 @@
+name: Run tactus testbed
+description: Configures, starts, follows and collects a tactus integration test suite
+
+inputs:
+  test_config:
+    description: Path to the test-suite config (relative to repo root)
+    required: true
+  case_selection:
+    description: Comma-separated case names to restrict to (empty = every case in test_config)
+    required: false
+    default: ""
+
+outputs:
+  test_dir:
+    description: Directory containing the generated per-case config.toml files
+    value: ${{ steps.configure.outputs.test_dir }}
+  status:
+    description: PASS or FAIL
+    value: ${{ steps.collect.outputs.status }}
+
+runs:
+  using: composite
+  steps:
+    - id: configure
+      name: Generate per-case configs
+      shell: bash
+      run: |
+        set -euo pipefail
+        config_file="${{ inputs.test_config }}"
+        if [ -n "${{ inputs.case_selection }}" ]; then
+          # tactus test has no CLI case filter; override [general.selection] in a
+          # copy of the config instead of adding a new tactus CLI flag for this.
+          config_file="ci_selection_$(basename "${{ inputs.test_config }}")"
+          poetry run python - "${{ inputs.test_config }}" "$config_file" "${{ inputs.case_selection }}" <<'PYEOF'
+        import sys
+        import tomlkit
+
+        src, dest, selection = sys.argv[1:4]
+        doc = tomlkit.parse(open(src).read())
+        doc["general"]["selection"] = [c.strip() for c in selection.split(",") if c.strip()]
+        with open(dest, "w") as f:
+            f.write(tomlkit.dumps(doc))
+        PYEOF
+        fi
+        poetry run tactus test -c "$config_file" -m
+        # TestCases.test_dir is derived from [general.tag] (falling back to the
+        # git-derived version), not the config file name - ask TestCases itself
+        # rather than guessing, so this stays correct regardless of how the
+        # config sets (or doesn't set) [general.tag].
+        test_dir=$(poetry run python -c "
+        import argparse
+        from tactus.test_runner import TestCases
+        args = argparse.Namespace(config_file='$config_file', verbose=False, dry=False, generate_refs=False)
+        print(TestCases(args=args).test_dir)
+        ")
+        echo "test_dir=$test_dir" >> "$GITHUB_OUTPUT"
+        echo "resolved_config=$config_file" >> "$GITHUB_OUTPUT"
+
+    - name: Start suites
+      shell: bash
+      run: poetry run tactus test -c "${{ steps.configure.outputs.resolved_config }}" -r
+
+    - name: Follow suites and summarize
+      shell: bash
+      run: |
+        poetry run python scripts/ci/monitor_suite.py \
+          --mode testbed \
+          --config "${{ steps.configure.outputs.resolved_config }}" \
+          --poll-interval-seconds "${{ env.TACTUS_POLL_INTERVAL_SECONDS || '60' }}" \
+          --timeout-minutes "${{ env.TACTUS_SUITE_TIMEOUT_MINUTES || '240' }}"
+
+    - id: collect
+      name: Collect final pass/fail
+      shell: bash
+      run: |
+        set +e
+        poetry run tactus test -c "${{ steps.configure.outputs.resolved_config }}"
+        rc=$?
+        set -e
+        echo "status=$([ $rc -eq 0 ] && echo PASS || echo FAIL)" >> "$GITHUB_OUTPUT"
+        exit $rc

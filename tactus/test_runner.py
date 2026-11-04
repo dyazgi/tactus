@@ -490,8 +490,28 @@ class TestCases:
 
         return check, case_name, json_file, references_folder
 
-    def collect_summaries(self):
-        """Collect summaries from the runs."""
+    def _gather_summaries(self):
+        """Gather per-case summaries, shared by summary reporting and success checks.
+
+        This centralizes the summary-reading logic used by both
+        :meth:`collect_summaries` (human readable report) and :meth:`overall_success`
+        (boolean pass/fail for exit-code purposes), so the two never drift apart.
+
+        Returns:
+            summaries (dict): case_name -> summary. A summary is either the parsed
+                content of the case's ``summary.json`` file (with a ``creation_date``
+                key added), or the string ``"MISSING"`` (summary file not yet
+                produced) or ``"SKIPPED"`` (reference checking disabled for the case).
+            case_files (dict): case_name -> path to the case's summary json file
+                (only for cases where reference checking is active).
+            skipped (set): case names for which reference checking is disabled.
+            references_folder: the references folder path (as resolved for the last
+                processed case).
+
+        Raises:
+            FileNotFoundError: If no case mapping is available (run again with '-m').
+
+        """
         try:
             with open(f"{self.test_dir}/{self.config_name}_config_names.toml", "rb") as f:
                 config_names = tomli.load(f)
@@ -507,9 +527,8 @@ class TestCases:
 
         summaries = {}
         case_files = {}
-        width = 0
-        now = datetime.now()
         skipped = set()
+        references_folder = None
         for config_file in config_files:
             check, case_name, json_file, references_folder = (
                 TestCases.get_case_information(config_file)
@@ -529,7 +548,14 @@ class TestCases:
             else:
                 summaries[case_name] = "SKIPPED"
                 skipped.add(case_name)
-            width = max(width, len(case_name))
+
+        return summaries, case_files, skipped, references_folder
+
+    def collect_summaries(self):
+        """Collect summaries from the runs."""
+        summaries, case_files, skipped, references_folder = self._gather_summaries()
+        width = max((len(case_name) for case_name in summaries), default=0)
+        now = datetime.now()
 
         if len(summaries) > 0:
             with contextlib.suppress(KeyError):
@@ -558,6 +584,40 @@ class TestCases:
 
             if not self.verbose:
                 logger.opt(colors=True).info("<blue>Add '-v' for more info</blue>")
+
+    def overall_success(self):
+        """Return whether every selected, non-skipped case has a terminal SUCCESS result.
+
+        Reuses :meth:`_gather_summaries`, the same summary-reading logic used by
+        :meth:`collect_summaries`, so both share a single source of truth about
+        each case's outcome. A case counts as successful only if its
+        ``summary.json`` contains a completed analysis (i.e. neither still RUNNING
+        nor MISSING) whose result was SUCCESS (as computed by
+        ``CheckSummaryAnalysis``/``CheckSummaryJson.compute_and_append_analysis``,
+        stored under ``summary["analysis"]["success"]``). Cases for which reference
+        checking is disabled (SKIPPED) are ignored.
+
+        Returns:
+            bool: True if every non-skipped selected case succeeded (or there were
+                no non-skipped cases), False if any case is missing, still running,
+                or failed.
+
+        """
+        summaries, _case_files, skipped, _references_folder = self._gather_summaries()
+
+        for case_name, summary in summaries.items():
+            if case_name in skipped:
+                continue
+            if isinstance(summary, str):
+                # "MISSING": summary.json not produced (yet)
+                return False
+            if "analysis" not in summary:
+                # Still RUNNING: no final analysis appended to the summary yet
+                return False
+            if not summary["analysis"].get("success", False):
+                return False
+
+        return True
 
     def execute(self, args):
         """Execute test cases.
@@ -604,6 +664,17 @@ def run_test(args, config=None):
         args: Parsed command line arguments
         config: Unused; the test command manages its own config loading
 
+    Returns:
+        bool: For a plain ``tactus test -c <config>`` invocation (i.e. no ``-m``/``-r``
+            given, only a config file), the real pass/fail outcome as computed by
+            ``TestCases.overall_success()`` -- this is what lets CI gate on the
+            process exit code. For every other invocation (``--list``,
+            ``--prepare-binaries``, or ``-m``/``-r`` to configure/execute the
+            suites), ``True`` is returned to mean "the requested action ran", since
+            those are interactive/preparation actions rather than pass/fail
+            checks -- exactly as today. ``False`` is returned if there was nothing
+            to do at all.
+
     """
     t = TestCases(args=args)
 
@@ -621,5 +692,6 @@ def run_test(args, config=None):
             t.execute(args)
         else:
             t.collect_summaries()
+            return t.overall_success()
 
     return True

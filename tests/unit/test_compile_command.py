@@ -69,6 +69,7 @@ def test_create_compile_exp_sets_ial_tag_and_forced_modifications(
     args = argparse.Namespace(
         ial_tag="feature/test-branch",
         config_mods=["user_supplied_modification.toml"],
+        extra_config_mods=[],
         output_file=None,
         start_suite=False,
         case=None,
@@ -84,6 +85,39 @@ def test_create_compile_exp_sets_ial_tag_and_forced_modifications(
     assert args.config_mods == [
         "tactus/data/config_files/modifications/@HOST@.toml",
         "tactus/data/config_files/modifications/compile_suite.toml",
+    ]
+
+
+def test_create_compile_exp_appends_extra_config_mods(default_config, monkeypatch):
+    """Extra config-mod files are appended.
+
+    E.g. the CI overlay, not replacing the command's own forced modifications.
+    """
+    captured = {}
+
+    def fake_create_exp(args, config):
+        captured["args"] = args
+        captured["config"] = config
+
+    monkeypatch.setattr("tactus.commands_functions.create_exp", fake_create_exp)
+
+    args = argparse.Namespace(
+        ial_tag="develop",
+        config_mods=[],
+        extra_config_mods=["tactus/data/config_files/modifications/ci_atos_bologna.toml"],
+        output_file=None,
+        start_suite=False,
+        case=None,
+        keep_def_file=False,
+        expand_config=False,
+    )
+
+    create_compile_exp(args, default_config)
+
+    assert args.config_mods == [
+        "tactus/data/config_files/modifications/@HOST@.toml",
+        "tactus/data/config_files/modifications/compile_suite.toml",
+        "tactus/data/config_files/modifications/ci_atos_bologna.toml",
     ]
 
 

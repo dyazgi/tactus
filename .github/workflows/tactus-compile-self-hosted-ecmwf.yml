@@ -1,0 +1,75 @@
+#.github/workflows/tactus-compile-self-hosted-ecmwf.yml
+name: Tactus Compile (self-hosted ECMWF)
+
+# Triggered the same way as the reference HARMONIE self-hosted CI: any push
+# (gated below to only actually run when the commit message contains
+# "--action-compile"; the pull_request.title/body checks are carried over
+# from that reference for parity but are inert under a push-only trigger -
+# they'd only fire if this workflow is ever also wired to pull_request), or
+# an explicit manual dispatch.
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      ial_tag:
+        description: IAL git tag/branch to compile
+        required: true
+        default: develop
+      dry_run:
+        description: Only generate the compile config, do not submit (tactus compile -d)
+        type: boolean
+        default: false
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GH_REPO_READ_TOKEN }}
+  TACTUS_WLM_ACCOUNT: ${{ vars.TACTUS_WLM_ACCOUNT }}
+  TACTUS_WLM_QOS: ${{ vars.TACTUS_WLM_QOS }}
+  TACTUS_POLL_INTERVAL_SECONDS: ${{ vars.TACTUS_POLL_INTERVAL_SECONDS }}
+  TACTUS_SUITE_TIMEOUT_MINUTES: ${{ vars.TACTUS_SUITE_TIMEOUT_MINUTES }}
+
+# One compile per ial_tag at a time (same workspace/install_dir would collide);
+# unrelated tags are independent and may run concurrently, unlike the
+# reference repo's unexplained blanket max-parallel: 1 across the whole matrix.
+concurrency:
+  group: tactus-compile-${{ github.event.inputs.ial_tag || 'develop' }}
+  cancel-in-progress: false
+
+jobs:
+  compile:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '--action-compile') ||
+      contains(github.event.pull_request.title, '--action-compile') ||
+      contains(github.event.pull_request.body, '--action-compile')
+    # "ecmwf-ecflow" is a placeholder label - point this at whatever label your
+    # self-hosted runner (the ecFlow VM with tactus/troika/ecFlow already set
+    # up) is actually registered under.
+    runs-on: [self-hosted, ecmwf-ecflow]
+    timeout-minutes: 180
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set github credentials
+        uses: ./.github/actions/setup-github-credentials
+        with:
+          github_token: ${{ env.GITHUB_TOKEN }}
+
+      - name: Install the project itself
+        run: poetry install --no-interaction --only main,test
+
+      - id: compile
+        name: Compile via tactus
+        uses: ./.github/actions/run-compile
+        with:
+          ial_tag: ${{ github.event.inputs.ial_tag || 'develop' }}
+          dry_run: ${{ github.event.inputs.dry_run || 'false' }}
+
+      - name: Cleanup
+        if: always()
+        uses: ./.github/actions/cleanup-tactus-run
+        with:
+          scope: compile
+          config_file: ${{ steps.compile.outputs.config_file }}

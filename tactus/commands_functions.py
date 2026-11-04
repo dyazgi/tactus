@@ -164,6 +164,7 @@ def create_compile_exp(args, config):
     args.config_mods = [
         "tactus/data/config_files/modifications/@HOST@.toml",
         "tactus/data/config_files/modifications/compile_suite.toml",
+        *(args.extra_config_mods or []),
     ]
 
     create_exp(args, config)

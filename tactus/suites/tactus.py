@@ -173,7 +173,7 @@ class TactusSuiteDefinition(SuiteDefinition):
             final_cleaning_trigger.append(last_time_dependent_part)
 
         if config["reference_checker.check"] or config["reference_checker.generate"]:
-            EcflowSuiteTask(
+            reference_check = EcflowSuiteTask(
                 "ReferenceCheck",
                 self.suite,
                 config,
@@ -183,6 +183,23 @@ class TactusSuiteDefinition(SuiteDefinition):
                 trigger=final_cleaning_trigger,
                 ecf_files_remotely=self.ecf_files_remotely,
             )
+            # CIMonitor writes this case's ci_status.txt. It must run whether
+            # ReferenceCheck completed or aborted (a real test FAILURE makes
+            # ReferenceCheck itself abort -- see
+            # `ReferenceCheckManager.analyze_summaries`), so it is wired up
+            # manually below rather than via the `trigger=` constructor argument
+            # (which only supports the implicit `== complete` trigger mode).
+            ci_monitor = EcflowSuiteTask(
+                "CIMonitor",
+                self.suite,
+                config,
+                self.task_settings,
+                self.ecf_files,
+                input_template=input_template,
+                ecf_files_remotely=self.ecf_files_remotely,
+                variables={"ARGS": "context=testbed"},
+            )
+            ci_monitor.add_always_trigger(reference_check)
 
         if config["suite_control.do_cleaning"]:
             EcflowSuiteTask(

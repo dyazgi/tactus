@@ -1,0 +1,57 @@
+name: Cleanup tactus CI run
+description: Removes ecFlow suites and ephemeral on-disk artifacts for a tactus CI run
+
+# Persistent-vs-ephemeral policy for this action:
+#   - Kept on purpose, across runs: the compile build cache under
+#     [platform_paths.install_dir] (e.g. /perm/deployde330/github-actions/install/)
+#     and any [platform_paths.scratch] "references" tree used as the testbed
+#     reference experiment. Neither is touched here.
+#   - Always removed, regardless of outcome: the ecFlow suite(s) for this run
+#     (via 'tactus remove', which also force-suspends/removes suites that never
+#     reached 'complete' when --force-remove is given, so a cancelled or timed
+#     out run doesn't leave orphaned SLURM jobs behind) and the ephemeral
+#     per-run config directory checked out on the runner (the generated
+#     compile_*.toml / <tag>_configs/ workspace) - never the persistent
+#     install/scratch paths above, which 'tactus remove' itself knows not to
+#     touch unless explicitly configured to.
+
+inputs:
+  scope:
+    description: "compile or testbed"
+    required: true
+  config_file:
+    description: Generated compile config.toml (scope=compile)
+    required: false
+    default: ""
+  test_dir:
+    description: Directory of generated per-case config.toml files (scope=testbed)
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Remove ecFlow suite(s) and ephemeral workspace
+      if: always()
+      shell: bash
+      run: |
+        set -uo pipefail
+
+        if [ "${{ inputs.scope }}" = "compile" ] && [ -n "${{ inputs.config_file }}" ]; then
+          if [ -f "${{ inputs.config_file }}" ]; then
+            poetry run tactus remove --execute-removal --force-remove "${{ inputs.config_file }}"
+          fi
+          rm -f "${{ inputs.config_file }}"
+        fi
+
+        if [ "${{ inputs.scope }}" = "testbed" ] && [ -n "${{ inputs.test_dir }}" ]; then
+          if [ -d "${{ inputs.test_dir }}" ]; then
+            for cfg in "${{ inputs.test_dir }}"/*.toml; do
+              [ -f "$cfg" ] || continue
+              poetry run tactus remove --execute-removal --force-remove "$cfg"
+            done
+          fi
+          rm -rf "${{ inputs.test_dir }}"
+        fi
+
+        exit 0

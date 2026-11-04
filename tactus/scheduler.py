@@ -248,6 +248,40 @@ class EcflowServer(Server):
             except RuntimeError as err:
                 raise RuntimeError("Could not replace suite " + suite_name) from err
 
+    def get_node_state(self, path):
+        """Get the current ecFlow state of any node (task, family or suite).
+
+        This is the minimal primitive needed to answer "did the thing at `path`
+        reach a terminal state, and which one" without shelling out to
+        `ecflow_client`; it is used both by :class:`tactus.tasks.monitor.CIMonitor`
+        (to check whether a preceding build task completed or aborted) and by
+        `scripts/ci/monitor_suite.py` (to poll a `CIMonitor` task itself for
+        completion).
+
+        Args:
+            path (str): Absolute ecFlow node path (e.g. "/suite/family/task").
+
+        Returns:
+            ecflow.State or None: The node's current state, or None if no node
+                exists at `path` (e.g. the suite hasn't been started yet).
+        """
+        self.ecf_client.sync_local()
+        node = self.ecf_client.get_defs().find_abs_node(path)
+        if node is None:
+            return None
+        return node.get_state()
+
+    def node_is_complete(self, path):
+        """Return True iff the node at `path` is currently in the `complete` state.
+
+        Args:
+            path (str): Absolute ecFlow node path (e.g. "/suite/family/task").
+
+        Returns:
+            bool: True if the node exists and its state is `complete`.
+        """
+        return self.get_node_state(path) == ecflow.State.complete
+
     def suite_is_complete(self, suite):
         """Returns the true if a suite is complete.
 
