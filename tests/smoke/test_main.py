@@ -11,7 +11,7 @@ from unittest import mock
 import pytest
 
 from tactus import GeneralConstants
-from tactus.__main__ import cli, main
+from tactus.__main__ import main
 from tactus.argparse_wrapper import get_args_parser
 from tactus.config_parser import ConfigFileValidationError, ConfigParserDefaults
 from tactus.host_actions import HostNotFoundError
@@ -237,36 +237,3 @@ def test_format_namelists_command(tmp_path):
         "yaml",
     ]
     main(args)
-
-
-def test_cli_exits_one_on_failing_test_command(mocker):
-    """`tactus test` FAILURE/MISSING/RUNNING must be visible as a non-zero exit code."""
-    mocker.patch("tactus.argparse_wrapper.run_test", return_value=False)
-    mock_exit = mocker.patch("tactus.__main__.sys.exit")
-
-    cli(["test"])
-
-    mock_exit.assert_called_once_with(1)
-
-
-def test_cli_exits_zero_on_passing_test_command(mocker):
-    """A real `tactus test` PASS must be visible as a zero exit code."""
-    mocker.patch("tactus.argparse_wrapper.run_test", return_value=True)
-    mock_exit = mocker.patch("tactus.__main__.sys.exit")
-
-    cli(["test"])
-
-    mock_exit.assert_called_once_with(0)
-
-
-@pytest.mark.parametrize("run_command_result", [None, True])
-def test_cli_exits_zero_when_run_command_does_not_report_failure(
-    mocker, run_command_result
-):
-    """Commands that don't return a meaningful bool (the vast majority) still exit 0."""
-    mocker.patch("tactus.__main__.main", return_value=run_command_result)
-    mock_exit = mocker.patch("tactus.__main__.sys.exit")
-
-    cli(["show", "config"])
-
-    mock_exit.assert_called_once_with(0)

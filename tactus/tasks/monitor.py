@@ -45,8 +45,8 @@ class CIMonitor(Task):
     - ``testbed`` (the default): success is reused, not reimplemented, from the
       case's own ``summary.json``, which
       ``tactus.reference_checker.ReferenceCheckManager``/``CheckSummaryAnalysis``
-      already analyzed and wrote an ``analysis.success`` boolean into -- the
-      exact same field ``tactus.test_runner.TestCases.overall_success()`` reads.
+      already analyzed and wrote an ``analysis.success`` boolean into -- read
+      directly here, independent of ``tactus test``'s own exit code.
 
     The status file is written to ``@CASEDIR@/ci_status.txt`` (`` system.casedir``
     resolved via ``Platform.get_system_value("casedir")``), which for the compile

@@ -14,6 +14,12 @@ outputs:
   config_file:
     description: Path to the generated compile config.toml
     value: ${{ steps.run.outputs.config_file }}
+  artifact_paths:
+    description: >-
+      Newline-separated @CASEDIR@ paths (on HPC scratch) holding ci_status.txt
+      for this compile - NOT under the runner's local checkout. Feed this
+      directly into actions/upload-artifact's `path:` input.
+    value: ${{ steps.summary.outputs.artifact_paths }}
   status:
     description: PASS or FAIL
     value: ${{ steps.summary.outputs.status }}
@@ -26,13 +32,43 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        config_file="compile_${{ inputs.ial_tag }}.toml"
-        dry_flag=""
-        if [ "${{ inputs.dry_run }}" = "true" ]; then
-          dry_flag="-d"
+        # ial_tag is a branch name (e.g. "feature/x") and may contain "/",
+        # which is not valid inside a single-file local config_file name on
+        # the runner, nor inside the ecFlow suite name tactus would otherwise
+        # derive from it (general.case = "IAL_@IAL_TAG@_compile" embeds it
+        # verbatim) - sanitize once and reuse for both, and pass --case-name
+        # to bypass that macro-derived suite name entirely (--case-name
+        # replaces general.case outright, before any @...@ substitution runs
+        # against it).
+        safe_tag=$(echo "${{ inputs.ial_tag }}" | tr -c 'A-Za-z0-9._-' '_')
+        config_file="compile_${safe_tag}.toml"
+
+        # tactus compile has no way to accept extra config-mod files beyond
+        # its own two hardcoded ones, so call tactus case directly instead -
+        # it already accepts an arbitrary list of config-mod files
+        # positionally. Thread ial_git_branch through a tiny generated mod
+        # file in place of tactus compile's --ial-tag convenience flag.
+        ial_tag_mod="ci_ial_tag_${safe_tag}.toml"
+        cat > "$ial_tag_mod" <<EOF
+        [compile]
+          ial_git_branch = "${{ inputs.ial_tag }}"
+        EOF
+
+        start_flag=""
+        if [ "${{ inputs.dry_run }}" != "true" ]; then
+          # tactus case defaults to NOT starting the suite, opposite polarity
+          # of tactus compile's -d/--dry-run.
+          start_flag="-s"
         fi
-        poetry run tactus compile --ial-tag "${{ inputs.ial_tag }}" $dry_flag -o "$config_file" \
-          tactus/data/config_files/modifications/ci_atos_bologna.toml
+
+        poetry run tactus case \
+          tactus/data/config_files/modifications/@HOST@.toml \
+          tactus/data/config_files/modifications/compile_suite.toml \
+          tactus/data/config_files/modifications/ci_atos_bologna.toml \
+          "$ial_tag_mod" \
+          --case-name "IAL_${safe_tag}_compile" \
+          -o "$config_file" \
+          $start_flag
         echo "config_file=$config_file" >> "$GITHUB_OUTPUT"
 
     - id: summary
@@ -45,7 +81,13 @@ runs:
           --mode compile \
           --config "${{ steps.run.outputs.config_file }}" \
           --poll-interval-seconds "${{ env.TACTUS_POLL_INTERVAL_SECONDS || '60' }}" \
-          --timeout-minutes "${{ env.TACTUS_SUITE_TIMEOUT_MINUTES || '180' }}"
+          --timeout-minutes "${{ env.TACTUS_SUITE_TIMEOUT_MINUTES || '180' }}" \
+          --artifact-manifest ci_artifact_casedirs.txt
         rc=$?
+        {
+          echo "artifact_paths<<EOF_ARTIFACT_PATHS"
+          sed 's#$#/**#' ci_artifact_casedirs.txt
+          echo "EOF_ARTIFACT_PATHS"
+        } >> "$GITHUB_OUTPUT"
         echo "status=$([ $rc -eq 0 ] && echo PASS || echo FAIL)" >> "$GITHUB_OUTPUT"
         exit $rc

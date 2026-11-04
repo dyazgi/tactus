@@ -62,6 +62,20 @@ class MonitorTarget:
     #: Resolved path of the `ci_status.txt` file it writes.
     status_file: str
 
+    @property
+    def casedir(self) -> str:
+        """The resolved `@CASEDIR@` this target's `ci_status.txt` lives under.
+
+        Also where the reference checker's own `checks/` subtree (`summary.json`,
+        `summary.txt`, per-task `.diff` files - see
+        `tactus/data/config_files/include/reference_checker.toml`) lives for a
+        testbed case, so this is the right root for a CI artifact upload: the
+        runner's local checkout only ever holds generated `*.toml` configs, never
+        these result files.
+
+        """
+        return os.path.dirname(self.status_file)
+
 
 def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
     """Parse command line arguments.
@@ -105,6 +119,16 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
         default=240,
         help="Hard deadline: give up (and suspend anything still pending) after "
         "this many minutes.",
+    )
+    parser.add_argument(
+        "--artifact-manifest",
+        default=None,
+        help="If given, write each target's resolved @CASEDIR@ (one per line, "
+        "deduplicated) to this file. @CASEDIR@ is where ci_status.txt, the "
+        "reference checker's summary.json/.txt and its per-task .diff files all "
+        "actually live (on HPC scratch) - NOT under the runner's local checkout, "
+        "so a caller that wants to upload these as a CI artifact should glob "
+        "against the paths in this manifest, not guess a path.",
     )
     return parser.parse_args(argv)
 
@@ -318,6 +342,22 @@ def write_step_summary(results: dict[str, dict]) -> None:
         print(markdown)
 
 
+def write_artifact_manifest(targets: list[MonitorTarget], manifest_path: str) -> None:
+    """Write each target's `casedir` (deduplicated, order-preserving) to a file.
+
+    Args:
+        targets (list[MonitorTarget]): Targets whose `casedir` to record.
+        manifest_path (str): File to write, one `casedir` per line.
+
+    """
+    casedirs = list(dict.fromkeys(target.casedir for target in targets))
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(casedirs) + ("\n" if casedirs else ""))
+    logger.info(
+        "Wrote {} casedir(s) to artifact manifest {}", len(casedirs), manifest_path
+    )
+
+
 def _suspend_one(server: EcflowServer, target: MonitorTarget) -> None:
     """Suspend a single target's ecFlow node (best-effort, logs but never raises).
 
@@ -388,6 +428,9 @@ def main(argv: Optional[list] = None) -> int:
 
     results = read_results(targets, states)
     write_step_summary(results)
+
+    if args.artifact_manifest:
+        write_artifact_manifest(targets, args.artifact_manifest)
 
     return 0 if all(result["status"] == "PASS" for result in results.values()) else 1
 

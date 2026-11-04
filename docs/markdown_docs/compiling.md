@@ -23,7 +23,6 @@ The `compile` subcommand is a specialization of `tactus case`. It:
 * Always merges the following modification files on top of the user-supplied config:
   * `tactus/data/config_files/modifications/@HOST@.toml`
   * `tactus/data/config_files/modifications/compile_suite.toml`
-  * any additional files passed as positional `extra_config_mods` arguments (applied last, after the two above) - e.g. `tactus compile --ial-tag develop tactus/data/config_files/modifications/ci_atos_bologna.toml`
 * Forwards everything else (output path, start-suite flag, keep-def-file, expand-config) to `tactus case`
 
 ## Required configuration
@@ -32,7 +31,7 @@ For the compilation suite to run end-to-end, the following keys are read by the 
 
 | Key | Used by | Notes |
 | --- | --- | --- |
-| `compile.ial_git_repo` | `IALClone` | Required if cloning IAL. Default is the ACCORD-NWP upstream (`config.toml`); ECMWF's self-hosted CI overrides this to the Hirlam fork (`https://github.com/Hirlam/IAL`) via `ci_atos_bologna.toml` - see [Self-hosted ECMWF CI](hpc_self_hosted_ci.md) |
+| `compile.ial_git_repo` | `IALClone` | Required if cloning IAL |
 | `compile.ial_git_branch` | `IALClone`, macro `@IAL_TAG@` | Set via `--ial-tag` |
 | `compile.git_token` | `IALClone`, `TactusBundleCreate` | Optional; enables HTTPS token auth |
 | `compile.ial_dir` | `IALClone`, `TactusBundleCreate` | Local IAL checkout path |

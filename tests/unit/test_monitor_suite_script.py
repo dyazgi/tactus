@@ -133,6 +133,58 @@ class TestWriteStepSummary:
         assert "| a | PASS |" in capsys.readouterr().out
 
 
+class TestCasedir:
+    """Unit tests for `MonitorTarget.casedir`."""
+
+    def test_casedir_is_status_file_dirname(self):
+        target = monitor_suite.MonitorTarget(
+            "a", "/a/CIMonitor", "/scratch/user/SYS/CASE_a/ci_status.txt"
+        )
+
+        assert target.casedir == "/scratch/user/SYS/CASE_a"
+
+
+class TestWriteArtifactManifest:
+    """Unit tests for `write_artifact_manifest()`."""
+
+    def test_writes_one_casedir_per_line(self, tmp_path):
+        targets = [
+            monitor_suite.MonitorTarget("a", "/a/CIMonitor", "/scratch/CASE_a/ci_status.txt"),
+            monitor_suite.MonitorTarget("b", "/b/CIMonitor", "/scratch/CASE_b/ci_status.txt"),
+        ]
+        manifest = tmp_path / "manifest.txt"
+
+        monitor_suite.write_artifact_manifest(targets, str(manifest))
+
+        assert manifest.read_text(encoding="utf-8").splitlines() == [
+            "/scratch/CASE_a",
+            "/scratch/CASE_b",
+        ]
+
+    def test_deduplicates_casedirs_preserving_order(self, tmp_path):
+        # e.g. a compile suite's R64/R32 legs sharing one casedir.
+        targets = [
+            monitor_suite.MonitorTarget(
+                "compile:R64", "/x/CIMonitor", "/scratch/CASE/ci_status.txt"
+            ),
+            monitor_suite.MonitorTarget(
+                "compile:R32", "/y/CIMonitor", "/scratch/CASE/ci_status.txt"
+            ),
+        ]
+        manifest = tmp_path / "manifest.txt"
+
+        monitor_suite.write_artifact_manifest(targets, str(manifest))
+
+        assert manifest.read_text(encoding="utf-8").splitlines() == ["/scratch/CASE"]
+
+    def test_empty_targets_writes_empty_file(self, tmp_path):
+        manifest = tmp_path / "manifest.txt"
+
+        monitor_suite.write_artifact_manifest([], str(manifest))
+
+        assert manifest.read_text(encoding="utf-8") == ""
+
+
 class TestSuspendTargets:
     """Unit tests for `_suspend_targets()`/`_suspend_one()`."""
 

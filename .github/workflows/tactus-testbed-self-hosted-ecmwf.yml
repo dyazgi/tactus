@@ -41,16 +41,11 @@ jobs:
       contains(github.event.head_commit.message, '--action-testbed') ||
       contains(github.event.pull_request.title, '--action-testbed') ||
       contains(github.event.pull_request.body, '--action-testbed')
-    # "ecmwf-ecflow" is a placeholder label - point this at whatever label your
-    # self-hosted runner (the ecFlow VM with tactus/troika/ecFlow already set
-    # up) is actually registered under.
-    runs-on: [self-hosted, ecmwf-ecflow]
+    runs-on: [self-hosted, tactus]
     timeout-minutes: 300
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
-        with:
-          submodules: recursive
 
       - name: Set github credentials
         uses: ./.github/actions/setup-github-credentials
@@ -68,14 +63,15 @@ jobs:
           case_selection: ${{ github.event.inputs.case_selection || vars.TACTUS_TESTBED_CASE_SELECTION || '' }}
 
       - name: Upload testbed logs and check summaries
+        # ci_status.txt/summary.json/summary.txt/*.diff live under each case's
+        # @CASEDIR@ on HPC scratch, NOT under test_dir (which only ever holds
+        # the generated *.toml configs on the runner's own checkout) - glob
+        # against run-testbed's artifact_paths output instead of test_dir.
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: tactus-testbed-${{ github.run_id }}
-          path: |
-            ${{ steps.testbed.outputs.test_dir }}/**/summary.json
-            ${{ steps.testbed.outputs.test_dir }}/**/*.diff
-            ${{ steps.testbed.outputs.test_dir }}/**/ci_status.txt
+          path: ${{ steps.testbed.outputs.artifact_paths }}
           retention-days: 14
           if-no-files-found: warn
 
