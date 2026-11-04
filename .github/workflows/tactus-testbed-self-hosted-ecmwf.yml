@@ -116,7 +116,20 @@ jobs:
           set -euo pipefail
           source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
           printf -v args '%q ' "$@"
-          helper_exec "cd '$PWD' && poetry $args"
+          # ssh does not forward this job's environment by default - without
+          # this, TACTUS_WLM_ACCOUNT/TACTUS_WLM_QOS (ci_atos_bologna.toml's
+          # os_macros, read from the environment during config generation)
+          # are silently unset remotely, leaving generated job scripts with
+          # a literal unexpanded '@TACTUS_WLM_QOS@' and SLURM submission
+          # failing. Forward exactly the vars that matter, explicitly.
+          env_prefix=""
+          for var in TACTUS_WLM_ACCOUNT TACTUS_WLM_QOS; do
+            if [ -n "${!var:-}" ]; then
+              printf -v quoted '%q' "${!var}"
+              env_prefix+="$var=$quoted "
+            fi
+          done
+          helper_exec "cd '$PWD' && $env_prefix poetry $args"
           EOF
           chmod +x "$shim_dir/poetry"
           echo "$shim_dir" >> "$GITHUB_PATH"
