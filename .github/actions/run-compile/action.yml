@@ -48,26 +48,37 @@ runs:
           -o "$config_file"
         echo "config_file=$config_file" >> "$GITHUB_OUTPUT"
 
-    - name: Apply CI submission overlay to generated compile config
+    - name: Apply CI submission overrides to generated compile config
+      # Opt-in and literal-valued, same as run-testbed's equivalent step:
+      # with neither TACTUS_WLM_ACCOUNT nor TACTUS_WLM_QOS configured, this
+      # step is a no-op and the generated config is left exactly as `tactus
+      # compile` produced it - no CI-only account/QOS override unless one is
+      # explicitly set. `tactus compile` has no CLI-exposed config_mods
+      # (unlike `tactus case`/`tactus test -m`, see run-testbed/action.yml),
+      # so this still patches the generated config.toml directly rather than
+      # layering in a mod file - but with literal values, not @MACRO@
+      # placeholders, so there's nothing left for tactus to substitute later.
+      if: env.TACTUS_WLM_ACCOUNT != '' || env.TACTUS_WLM_QOS != ''
       shell: bash
       run: |
         poetry run python - "${{ steps.run.outputs.config_file }}" \
-          tactus/data/config_files/modifications/ci_atos_bologna.toml <<'PYEOF'
+          "${TACTUS_WLM_ACCOUNT:-}" "${TACTUS_WLM_QOS:-}" <<'PYEOF'
         import sys
         import tomlkit
 
-        dest, overlay_file = sys.argv[1:3]
-        overlay = tomlkit.parse(open(overlay_file).read())
-
-        def deep_merge(base, extra):
-            for key, value in extra.items():
-                if key in base and hasattr(base[key], "items") and hasattr(value, "items"):
-                    deep_merge(base[key], value)
-                else:
-                    base[key] = value
-
+        dest, account, qos = sys.argv[1:4]
         doc = tomlkit.parse(open(dest).read())
-        deep_merge(doc, overlay)
+        submission = doc.setdefault("submission", {})
+        if account:
+            submission["account"] = f"#SBATCH --account={account}"
+        if qos:
+            qos_line = f"#SBATCH --qos={qos}"
+            types = submission.setdefault("types", {})
+            for t in ("gnu", "parallel", "serial"):
+                types.setdefault(t, {}).setdefault("BATCH", {})["QOS"] = qos_line
+            task_exceptions = submission.setdefault("task_exceptions", {})
+            for t in ("TactusBundleBuild", "Marsprep"):
+                task_exceptions.setdefault(t, {}).setdefault("BATCH", {})["QOS"] = qos_line
         with open(dest, "w") as f:
             f.write(tomlkit.dumps(doc))
         PYEOF

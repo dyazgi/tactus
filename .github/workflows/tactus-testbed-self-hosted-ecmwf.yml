@@ -14,7 +14,7 @@ on:
       test_config:
         description: Path to the test-suite config (relative to repo root)
         required: false
-        default: tactus/data/tests/atos_bologna_CY49t2.toml
+        default: tactus/data/tests/atos_ci_bologna_CY49t2.toml
       case_selection:
         description: Comma-separated case names to restrict to (empty = all in test_config)
         required: false
@@ -36,8 +36,12 @@ on:
 
 env:
   GITHUB_TOKEN: ${{ secrets.GH_REPO_READ_TOKEN }}
-  TACTUS_WLM_ACCOUNT: ${{ vars.TACTUS_WLM_ACCOUNT || 'spfracco' }}
-  TACTUS_WLM_QOS: ${{ vars.TACTUS_WLM_QOS || 'nf' }}
+  # Empty (not a hardcoded default) unless the repo/org variable is set -
+  # see run-testbed/action.yml and run-compile/action.yml: with neither set,
+  # CI submits with no account/QOS override at all, identical to a plain
+  # manual `tactus test -c ... -m -r`/`tactus compile` run.
+  TACTUS_WLM_ACCOUNT: ${{ vars.TACTUS_WLM_ACCOUNT }}
+  TACTUS_WLM_QOS: ${{ vars.TACTUS_WLM_QOS }}
   TACTUS_POLL_INTERVAL_SECONDS: ${{ vars.TACTUS_POLL_INTERVAL_SECONDS }}
   TACTUS_SUITE_TIMEOUT_MINUTES: ${{ vars.TACTUS_SUITE_TIMEOUT_MINUTES }}
 
@@ -116,20 +120,12 @@ jobs:
           set -euo pipefail
           source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
           printf -v args '%q ' "$@"
-          # ssh does not forward this job's environment by default - without
-          # this, TACTUS_WLM_ACCOUNT/TACTUS_WLM_QOS (ci_atos_bologna.toml's
-          # os_macros, read from the environment during config generation)
-          # are silently unset remotely, leaving generated job scripts with
-          # a literal unexpanded '@TACTUS_WLM_QOS@' and SLURM submission
-          # failing. Forward exactly the vars that matter, explicitly.
-          env_prefix=""
-          for var in TACTUS_WLM_ACCOUNT TACTUS_WLM_QOS; do
-            if [ -n "${!var:-}" ]; then
-              printf -v quoted '%q' "${!var}"
-              env_prefix+="$var=$quoted "
-            fi
-          done
-          helper_exec "cd '$PWD' && $env_prefix poetry $args"
+          # TACTUS_WLM_ACCOUNT/TACTUS_WLM_QOS no longer need forwarding here:
+          # run-testbed/action.yml and run-compile/action.yml resolve them to
+          # literal values in their own (local) bash steps, before ever
+          # invoking poetry/tactus - nothing downstream of this shim depends
+          # on them being present in the remote environment.
+          helper_exec "cd '$PWD' && poetry $args"
           EOF
           chmod +x "$shim_dir/poetry"
           echo "$shim_dir" >> "$GITHUB_PATH"
@@ -170,7 +166,7 @@ jobs:
         name: Run testbed via tactus
         uses: ./.github/actions/run-testbed
         with:
-          test_config: ${{ github.event.inputs.test_config || vars.TACTUS_TEST_CONFIG || 'tactus/data/tests/atos_bologna_CY49t2.toml' }}
+          test_config: ${{ github.event.inputs.test_config || vars.TACTUS_TEST_CONFIG || 'tactus/data/tests/atos_ci_bologna_CY49t2.toml' }}
           case_selection: ${{ github.event.inputs.case_selection || vars.TACTUS_TESTBED_CASE_SELECTION || '' }}
           ial_version: ${{ steps.resolve.outputs.ial_ref }}
 
