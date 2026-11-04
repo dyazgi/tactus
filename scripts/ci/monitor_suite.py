@@ -38,7 +38,6 @@ import tomli
 
 from tactus import GeneralConstants
 from tactus.config_parser import ParsedConfig
-from tactus.derived_variables import set_times
 from tactus.logs import logger
 from tactus.scheduler import EcflowServer
 from tactus.tasks.monitor import STATUS_FILENAME
@@ -399,8 +398,14 @@ def main(argv: Optional[list] = None) -> int:
     """
     args = parse_args(argv)
 
+    # Only used below to construct EcflowServer(config), which just needs
+    # scheduler.ecfvars.* (host/port) - no date-derived macros. Don't call
+    # set_times() on it: for --mode testbed, args.config is the top-level
+    # test-runner config (e.g. atos_bologna_CY50t2.toml), which has no
+    # [general.times] section at all (each case's own generated config
+    # carries its own, resolved separately in discover_testbed_targets
+    # below) - set_times() would crash on that missing section.
     config = ParsedConfig.from_file(args.config, json_schema={})
-    config = config.copy(update=set_times(config))
 
     if args.mode == "compile":
         targets = discover_compile_targets(args.config)
