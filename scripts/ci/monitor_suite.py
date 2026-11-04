@@ -60,6 +60,14 @@ class MonitorTarget:
     ecf_path: str
     #: Resolved path of the `ci_status.txt` file it writes.
     status_file: str
+    #: Fully-resolved config file this target's ecf_path/status_file came
+    #: from (a per-case config for testbed, the compile config for compile)
+    #: - unlike the top-level config `main()` receives via --config (for
+    #: --mode testbed, the test-runner driver file), this one actually
+    #: carries [platform]/[system], so it's safe to build an EcflowServer
+    #: from it. Defaults to "" so existing tests constructing a MonitorTarget
+    #: without caring about this field don't need updating.
+    config_file: str = ""
 
     @property
     def casedir(self) -> str:
@@ -178,6 +186,7 @@ def discover_compile_targets(config_file: str) -> list[MonitorTarget]:
                 f"/{case_name}/Compilation/TactusBundleBuild/{precision}/CIMonitor"
             ),
             status_file=os.path.join(casedir, STATUS_FILENAME),
+            config_file=config_file,
         )
         for precision in precisions
     ]
@@ -220,6 +229,7 @@ def discover_testbed_targets(config_file: str) -> list[MonitorTarget]:
                 name=case,
                 ecf_path=f"/{ecf_case_name}/CIMonitor",
                 status_file=os.path.join(casedir, STATUS_FILENAME),
+                config_file=case_config_file,
             )
         )
     return targets
@@ -398,21 +408,24 @@ def main(argv: Optional[list] = None) -> int:
     """
     args = parse_args(argv)
 
-    # Only used below to construct EcflowServer(config), which just needs
-    # scheduler.ecfvars.* (host/port) - no date-derived macros. Don't call
-    # set_times() on it: for --mode testbed, args.config is the top-level
-    # test-runner config (e.g. atos_bologna_CY50t2.toml), which has no
-    # [general.times] section at all (each case's own generated config
-    # carries its own, resolved separately in discover_testbed_targets
-    # below) - set_times() would crash on that missing section.
-    config = ParsedConfig.from_file(args.config, json_schema={})
-
     if args.mode == "compile":
         targets = discover_compile_targets(args.config)
     else:
         targets = discover_testbed_targets(args.config)
 
-    server = EcflowServer(config)
+    if not targets:
+        logger.warning("No targets to monitor for {}", args.config)
+        return 0
+
+    # EcflowServer just needs scheduler.ecfvars.* (host/port), but building
+    # it requires a fully-resolved config carrying [platform]/[system] -
+    # args.config itself doesn't have those for --mode testbed (it's the
+    # top-level test-runner config, e.g. atos_bologna_CY50t2.toml, which only
+    # ever has [general]/[include]; each case's own generated config carries
+    # the rest). Reuse any one target's own already-resolved config instead -
+    # they all point at the same ecFlow server regardless of which one.
+    server_config = ParsedConfig.from_file(targets[0].config_file, json_schema={})
+    server = EcflowServer(server_config)
     pending_targets = list(targets)
 
     def _handle_sigterm(signum, _frame):

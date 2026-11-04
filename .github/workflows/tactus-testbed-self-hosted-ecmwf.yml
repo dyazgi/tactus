@@ -44,6 +44,19 @@ env:
   TACTUS_WLM_QOS: ${{ vars.TACTUS_WLM_QOS }}
   TACTUS_POLL_INTERVAL_SECONDS: ${{ vars.TACTUS_POLL_INTERVAL_SECONDS }}
   TACTUS_SUITE_TIMEOUT_MINUTES: ${{ vars.TACTUS_SUITE_TIMEOUT_MINUTES }}
+  # poetry.toml sets virtualenvs.options.system-site-packages = true (likely
+  # for interactive HPC use, relying on module-provided library bindings).
+  # That lets `poetry install` skip installing a package into .venv if it's
+  # already visible via whatever module/system python is active at install
+  # time - but the SLURM job that later runs tasks loads its own module set
+  # (e.g. a different ecmwf-toolbox version), which can make that package
+  # invisible again at run time (seen in practice: a
+  # ModuleNotFoundError: No module named 'marshmallow', a sub-dependency of
+  # json-schema-for-humans, inside a submitted job that ran fine through
+  # `poetry install`). Override it for CI only, without touching
+  # poetry.toml, so .venv is always fully self-contained here regardless of
+  # which module happens to be loaded when a task actually runs.
+  POETRY_VIRTUALENVS_OPTIONS_SYSTEM_SITE_PACKAGES: "false"
 
 # Real integration cases share Atos scratch space and the reference-experiment
 # tree, so - unlike compile - all testbed runs are deliberately serialized
