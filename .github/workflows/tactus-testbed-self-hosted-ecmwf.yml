@@ -18,6 +18,20 @@ on:
         description: Comma-separated case names to restrict to (empty = all in test_config)
         required: false
         default: ""
+      ial_tag:
+        description: >-
+          IAL ref to compile first and test against (branch/tag/commit).
+          Mutually exclusive with ial_git_version. Leave both blank to test
+          against each case's existing precompiled binaries, no compile.
+        type: string
+        default: ""
+      ial_git_version:
+        description: >-
+          IAL ref to compile first and test against (branch/tag/commit).
+          Mutually exclusive with ial_tag. Leave both blank to test against
+          each case's existing precompiled binaries, no compile.
+        type: string
+        default: ""
 
 env:
   GITHUB_TOKEN: ${{ secrets.GH_REPO_READ_TOKEN }}
@@ -52,8 +66,52 @@ jobs:
         with:
           github_token: ${{ env.GITHUB_TOKEN }}
 
+      - id: resolve
+        name: Resolve IAL ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          ial_tag="${{ github.event.inputs.ial_tag }}"
+          ial_git_version="${{ github.event.inputs.ial_git_version }}"
+          if [ -n "$ial_tag" ] && [ -n "$ial_git_version" ]; then
+            echo "::error::Only one of ial_tag / ial_git_version may be set, not both." >&2
+            exit 1
+          fi
+          ial_ref="${ial_tag}${ial_git_version}"
+          if [ -n "$ial_ref" ]; then
+            echo "should_compile=true" >> "$GITHUB_OUTPUT"
+            echo "ial_ref=$ial_ref" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_compile=false" >> "$GITHUB_OUTPUT"
+            echo "ial_ref=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install the project itself
         run: poetry install --no-interaction --only main,test
+
+      - id: compile
+        name: Compile IAL (if a version was given)
+        if: steps.resolve.outputs.should_compile == 'true'
+        uses: ./.github/actions/run-compile
+        with:
+          ial_tag: ${{ steps.resolve.outputs.ial_ref }}
+          dry_run: "false"
+
+      - name: Upload compile logs
+        if: always() && steps.resolve.outputs.should_compile == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tactus-testbed-compile-${{ github.run_id }}
+          path: ${{ steps.compile.outputs.artifact_paths }}
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Cleanup compile sub-step
+        if: always() && steps.resolve.outputs.should_compile == 'true'
+        uses: ./.github/actions/cleanup-tactus-run
+        with:
+          scope: compile
+          config_file: ${{ steps.compile.outputs.config_file }}
 
       - id: testbed
         name: Run testbed via tactus
@@ -61,6 +119,7 @@ jobs:
         with:
           test_config: ${{ github.event.inputs.test_config || vars.TACTUS_TEST_CONFIG || 'tactus/data/tests/atos_bologna_CY50t2.toml' }}
           case_selection: ${{ github.event.inputs.case_selection || vars.TACTUS_TESTBED_CASE_SELECTION || '' }}
+          ial_version: ${{ steps.resolve.outputs.ial_ref }}
 
       - name: Upload testbed logs and check summaries
         # ci_status.txt/summary.json/summary.txt/*.diff live under each case's

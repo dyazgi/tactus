@@ -11,6 +11,14 @@ on:
   push:
   workflow_dispatch:
     inputs:
+      ial_tag:
+        description: IAL ref to check out (branch/tag/commit). Mutually exclusive with ial_git_version; leave both blank to use config.toml's default.
+        type: string
+        default: ""
+      ial_git_version:
+        description: IAL ref to check out (branch/tag/commit). Mutually exclusive with ial_tag; leave both blank to use config.toml's default.
+        type: string
+        default: ""
       dry_run:
         description: Only generate the compile config, do not submit
         type: boolean
@@ -48,6 +56,23 @@ jobs:
         with:
           github_token: ${{ env.GITHUB_TOKEN }}
 
+      - id: resolve
+        name: Resolve IAL ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          ial_tag="${{ github.event.inputs.ial_tag }}"
+          ial_git_version="${{ github.event.inputs.ial_git_version }}"
+          if [ -n "$ial_tag" ] && [ -n "$ial_git_version" ]; then
+            echo "::error::Only one of ial_tag / ial_git_version may be set, not both." >&2
+            exit 1
+          fi
+          ial_ref="${ial_tag}${ial_git_version}"
+          if [ -z "$ial_ref" ]; then
+            ial_ref=$(grep -A5 '^\[compile\]' tactus/data/config_files/config.toml | grep 'ial_git_version' | head -1 | sed -E 's/.*=\s*"([^"]*)".*/\1/')
+          fi
+          echo "ial_ref=$ial_ref" >> "$GITHUB_OUTPUT"
+
       - name: Install the project itself
         run: poetry install --no-interaction --only main,test
 
@@ -55,7 +80,7 @@ jobs:
         name: Compile via tactus
         uses: ./.github/actions/run-compile
         with:
-          ial_tag: ${{ github.ref_name }}
+          ial_tag: ${{ steps.resolve.outputs.ial_ref }}
           dry_run: ${{ github.event.inputs.dry_run || 'false' }}
 
       - name: Upload compile logs

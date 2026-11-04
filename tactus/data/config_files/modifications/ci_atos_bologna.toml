@@ -1,10 +1,10 @@
 # CI overlay for self-hosted GitHub Actions runs on Atos Bologna ONLY.
 #
-# This is *not* meant for interactive/manual use. It is layered on top of
-# `submission/atos_bologna.toml` (e.g. via the positional config-modification
-# files accepted by `tactus case`, the same mechanism already used for e.g.
-# `modifications/compile_suite.toml`) to inject the real SLURM account/QOS that
-# CI jobs must submit under, instead of hardcoding them in workflow YAML.
+# This is *not* meant for interactive/manual use. It is tomlkit-merged into
+# the already-generated compile/testbed config.toml by the composite actions
+# under `.github/actions/run-compile` and `.github/actions/run-testbed`, to
+# inject the real SLURM account/QOS that CI jobs must submit under, instead
+# of hardcoding them in workflow YAML.
 #
 # `@TACTUS_WLM_ACCOUNT@`/`@TACTUS_WLM_QOS@` are resolved the same way every other
 # `@VAR@` placeholder in this config tree is: via `Platform.substitute()`, which
@@ -12,30 +12,13 @@
 # straight from the identically-named environment variable. The CI workflow is
 # expected to `export TACTUS_WLM_ACCOUNT=...`/`export TACTUS_WLM_QOS=...` (sourced
 # from `vars.TACTUS_WLM_ACCOUNT`/`vars.TACTUS_WLM_QOS`) before invoking
-# `tactus compile`/`tactus case`/`tactus test`.
-#
-# Usage:
-#   tactus compile --ial-tag <tag> tactus/data/config_files/modifications/ci_atos_bologna.toml
-#   tactus test -c <test_config> ...   (test configs list their modifs via [include])
-#
-# `tactus compile`'s `extra_config_mods` positional argument (added alongside this
-# file) appends any given files after its own hardcoded `@HOST@.toml`/
-# `compile_suite.toml` modifications, so this file is passed the same way `tactus
-# case`'s positional `config_mods` already works.
+# `tactus compile`/`tactus test`.
 
 [macros.select.ci]
   # Makes `@TACTUS_WLM_ACCOUNT@`/`@TACTUS_WLM_QOS@` resolve from the environment,
   # following the exact same convention as e.g. `macros.select.leonardo` (see
   # `tactus/data/config_files/modifications/leonardo.toml`).
   os_macros = ["TACTUS_WLM_ACCOUNT", "TACTUS_WLM_QOS"]
-
-[compile]
-  # ECMWF's self-hosted CI must build from the Hirlam fork of IAL, not the
-  # ACCORD-NWP upstream `compile.ial_git_repo` default
-  # (`tactus/data/config_files/config.toml`) - see `IALClone`
-  # (`tactus/tasks/compilation.py`), which just does a plain
-  # `git clone <ial_git_repo> <ial_dir>`, so any git-clonable URL works here.
-  ial_git_repo = "https://github.com/Hirlam/IAL"
 
 [submission]
   # `submission.account` is the one *global* fallback tactus already supports

@@ -9,6 +9,13 @@ inputs:
     description: Comma-separated case names to restrict to (empty = every case in test_config)
     required: false
     default: ""
+  ial_version:
+    description: >-
+      submission.ial_version to force on every generated case config (e.g. the
+      ref a preceding compile sub-step just built). Empty = leave each case's
+      own default (precompiled binaries) untouched.
+    required: false
+    default: ""
 
 outputs:
   test_dir:
@@ -80,13 +87,13 @@ runs:
       shell: bash
       run: |
         poetry run python - "${{ steps.configure.outputs.test_dir }}" \
-          tactus/data/config_files/modifications/ci_atos_bologna.toml <<'PYEOF'
+          tactus/data/config_files/modifications/ci_atos_bologna.toml \
+          "${{ inputs.ial_version }}" <<'PYEOF'
         import glob, os, sys
         import tomlkit
 
-        test_dir, overlay_file = sys.argv[1:3]
+        test_dir, overlay_file, ial_version = sys.argv[1:4]
         overlay = tomlkit.parse(open(overlay_file).read())
-        overlay.pop("compile", None)  # compile-only section, irrelevant to testbed cases
 
         def deep_merge(base, extra):
             for key, value in extra.items():
@@ -100,6 +107,8 @@ runs:
                 continue
             doc = tomlkit.parse(open(path).read())
             deep_merge(doc, overlay)
+            if ial_version:
+                doc.setdefault("submission", {})["ial_version"] = ial_version
             with open(path, "w") as f:
                 f.write(tomlkit.dumps(doc))
         PYEOF

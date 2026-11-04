@@ -662,7 +662,7 @@
         "ial_git_repo": {
           "type": "string",
           "description": "Git repo for IAL source",
-          "default": "git@github.com:ACCORD-NWP/IAL"
+          "default": "https://github.com/ACCORD-NWP/IAL"
         },
         "ial_git_version": {
           "type": "string",

@@ -28,48 +28,54 @@ runs:
   using: composite
   steps:
     - id: run
-      name: Submit compile suite
+      name: Generate compile config
       shell: bash
       run: |
         set -euo pipefail
-        # ial_tag is a branch name (e.g. "feature/x") and may contain "/",
-        # which is not valid inside a single-file local config_file name on
-        # the runner, nor inside the ecFlow suite name tactus would otherwise
-        # derive from it (general.case = "IAL_@IAL_TAG@_compile" embeds it
-        # verbatim) - sanitize once and reuse for both, and pass --case-name
-        # to bypass that macro-derived suite name entirely (--case-name
-        # replaces general.case outright, before any @...@ substitution runs
-        # against it).
+        # ial_tag may contain "/" (e.g. a branch name), which isn't valid in
+        # a local file name on the runner - sanitize just for the on-disk
+        # config file name. The ecFlow suite/case name is computed by `tactus
+        # compile` itself via sanitize_case_name(), no action needed here.
         safe_tag=$(echo "${{ inputs.ial_tag }}" | tr -c 'A-Za-z0-9._-' '_')
         config_file="compile_${safe_tag}.toml"
 
-        # tactus compile has no way to accept extra config-mod files beyond
-        # its own two hardcoded ones, so call tactus case directly instead -
-        # it already accepts an arbitrary list of config-mod files
-        # positionally. Thread ial_git_branch through a tiny generated mod
-        # file in place of tactus compile's --ial-tag convenience flag.
-        ial_tag_mod="ci_ial_tag_${safe_tag}.toml"
-        cat > "$ial_tag_mod" <<EOF
-        [compile]
-          ial_git_branch = "${{ inputs.ial_tag }}"
-        EOF
-
-        start_flag=""
-        if [ "${{ inputs.dry_run }}" != "true" ]; then
-          # tactus case defaults to NOT starting the suite, opposite polarity
-          # of tactus compile's -d/--dry-run.
-          start_flag="-s"
-        fi
-
-        poetry run tactus case \
-          tactus/data/config_files/modifications/@HOST@.toml \
-          tactus/data/config_files/modifications/compile_suite.toml \
-          tactus/data/config_files/modifications/ci_atos_bologna.toml \
-          "$ial_tag_mod" \
-          --case-name "IAL_${safe_tag}_compile" \
-          -o "$config_file" \
-          $start_flag
+        # -d/--dry-run only skips auto-starting the suite; config generation
+        # (including the three mod files tactus compile hardcodes - @HOST@,
+        # compile_suite, compile_@HOST@) always happens.
+        poetry run tactus compile \
+          --ial-tag "${{ inputs.ial_tag }}" \
+          -d \
+          -o "$config_file"
         echo "config_file=$config_file" >> "$GITHUB_OUTPUT"
+
+    - name: Apply CI submission overlay to generated compile config
+      shell: bash
+      run: |
+        poetry run python - "${{ steps.run.outputs.config_file }}" \
+          tactus/data/config_files/modifications/ci_atos_bologna.toml <<'PYEOF'
+        import sys
+        import tomlkit
+
+        dest, overlay_file = sys.argv[1:3]
+        overlay = tomlkit.parse(open(overlay_file).read())
+
+        def deep_merge(base, extra):
+            for key, value in extra.items():
+                if key in base and hasattr(base[key], "items") and hasattr(value, "items"):
+                    deep_merge(base[key], value)
+                else:
+                    base[key] = value
+
+        doc = tomlkit.parse(open(dest).read())
+        deep_merge(doc, overlay)
+        with open(dest, "w") as f:
+            f.write(tomlkit.dumps(doc))
+        PYEOF
+
+    - name: Start compile suite
+      if: ${{ inputs.dry_run != 'true' }}
+      shell: bash
+      run: poetry run tactus start suite -c "${{ steps.run.outputs.config_file }}"
 
     - id: summary
       name: Follow suite and summarize
