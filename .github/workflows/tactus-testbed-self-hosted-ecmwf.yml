@@ -178,6 +178,16 @@ jobs:
           scope: testbed
           test_dir: ${{ steps.testbed.outputs.test_dir }}
 
+      - name: Sweep any leftover suites for this run
+        # Safety net on top of the per-case `tactus remove` above: catches
+        # every suite still left for this run's unique tag, even if removing
+        # one case crashed and left others behind too (see
+        # scripts/ci/sweep_suites.sh for why).
+        if: always() && steps.testbed.outputs.run_tag != ''
+        continue-on-error: true
+        shell: bash
+        run: scripts/ci/sweep_suites.sh "${{ steps.testbed.outputs.run_tag }}"
+
       - name: Free local disk (poetry venv + cache)
         # This runner's local disk is small - don't rely on the next job's
         # checkout clean to reclaim this; free it as soon as this job ends.

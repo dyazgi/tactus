@@ -21,6 +21,16 @@ outputs:
   test_dir:
     description: Directory containing the generated per-case config.toml files
     value: ${{ steps.configure.outputs.test_dir }}
+  run_tag:
+    description: >-
+      Unique [general].tag injected into every case this run (branch_runid_
+      runattempt) - every case's ecFlow suite name starts with this. Feed it
+      to scripts/ci/sweep_suites.sh to force-remove every suite from this
+      run, regardless of whether per-case `tactus remove` succeeded.
+    value: ${{ steps.configure.outputs.run_tag }}
+  resolved_config:
+    description: The top-level test-runner config file this run generated
+    value: ${{ steps.configure.outputs.resolved_config }}
   artifact_paths:
     description: >-
       Newline-separated @CASEDIR@ paths (one per case, on HPC scratch) holding
@@ -76,6 +86,7 @@ runs:
         ")
         echo "test_dir=$test_dir" >> "$GITHUB_OUTPUT"
         echo "resolved_config=$config_file" >> "$GITHUB_OUTPUT"
+        echo "run_tag=$run_tag" >> "$GITHUB_OUTPUT"
 
     - name: Apply CI submission overlay to generated case configs
       # tactus test has no mechanism to layer extra submission overrides onto
