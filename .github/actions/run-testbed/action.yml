@@ -58,18 +58,42 @@ runs:
         # tactus test's own host=-dependency resolution runs, so dependent
         # cases stay consistent (see the "Fix 7" note in the plan for why a
         # post-hoc rename would break host= dependencies instead).
+        #
+        # The CI SLURM account/QOS overlay (and, when given, the ial_version
+        # override) are applied via [general].extra - the same native
+        # config-mods mechanism `tactus case` uses, that TestCases.create()
+        # (tactus/test_runner.py) already splices into every case's own
+        # `tactus case <base> <extra...> <outfile>` invocation. That runs
+        # per-case at generation time, through ExpFromFiles' own deep-merge
+        # + schema validation, BEFORE host=-dependency resolution - unlike
+        # the previous approach of tomlkit-patching the already-generated
+        # case configs on disk as a separate step after "Start suites",
+        # which a plain manual `tactus test -c ... -m -r` never goes
+        # through and is suspected of being what broke submission.
         config_file="ci_run_$(basename "${{ inputs.test_config }}")"
         safe_branch=$(echo "${{ github.ref_name }}" | tr -c 'A-Za-z0-9._-' '_')
         run_tag="${safe_branch}_${{ github.run_id }}_${{ github.run_attempt }}"
-        poetry run python - "${{ inputs.test_config }}" "$config_file" "${{ inputs.case_selection }}" "$run_tag" <<'PYEOF'
+        poetry run python - "${{ inputs.test_config }}" "$config_file" "${{ inputs.case_selection }}" "$run_tag" \
+          tactus/data/config_files/modifications/ci_atos_bologna.toml \
+          ci_ial_version_override.toml \
+          "${{ inputs.ial_version }}" <<'PYEOF'
         import sys
         import tomlkit
 
-        src, dest, selection, run_tag = sys.argv[1:5]
+        src, dest, selection, run_tag, ci_overlay, ial_mod_path, ial_version = sys.argv[1:8]
         doc = tomlkit.parse(open(src).read())
         if selection:
             doc["general"]["selection"] = [c.strip() for c in selection.split(",") if c.strip()]
         doc["general"]["tag"] = run_tag
+
+        extra = list(doc["general"].get("extra", []))
+        extra.append(ci_overlay)
+        if ial_version:
+            with open(ial_mod_path, "w") as f:
+                f.write(tomlkit.dumps({"submission": {"ial_version": ial_version}}))
+            extra.append(ial_mod_path)
+        doc["general"]["extra"] = extra
+
         with open(dest, "w") as f:
             f.write(tomlkit.dumps(doc))
         PYEOF
@@ -87,42 +111,6 @@ runs:
         echo "test_dir=$test_dir" >> "$GITHUB_OUTPUT"
         echo "resolved_config=$config_file" >> "$GITHUB_OUTPUT"
         echo "run_tag=$run_tag" >> "$GITHUB_OUTPUT"
-
-    - name: Apply CI submission overlay to generated case configs
-      # tactus test has no mechanism to layer extra submission overrides onto
-      # generated per-case configs (unlike tactus case/compile's positional
-      # config-mod files), so patch the already-generated configs directly -
-      # reusing the same ci_atos_bologna.toml overlay compile already uses,
-      # rather than maintaining the account/QOS values in two places. Must
-      # run before "Start suites", which reads these files straight off disk.
-      shell: bash
-      run: |
-        poetry run python - "${{ steps.configure.outputs.test_dir }}" \
-          tactus/data/config_files/modifications/ci_atos_bologna.toml \
-          "${{ inputs.ial_version }}" <<'PYEOF'
-        import glob, os, sys
-        import tomlkit
-
-        test_dir, overlay_file, ial_version = sys.argv[1:4]
-        overlay = tomlkit.parse(open(overlay_file).read())
-
-        def deep_merge(base, extra):
-            for key, value in extra.items():
-                if key in base and hasattr(base[key], "items") and hasattr(value, "items"):
-                    deep_merge(base[key], value)
-                else:
-                    base[key] = value
-
-        for path in glob.glob(os.path.join(test_dir, "*.toml")):
-            if path.endswith("_config_names.toml"):
-                continue
-            doc = tomlkit.parse(open(path).read())
-            deep_merge(doc, overlay)
-            if ial_version:
-                doc.setdefault("submission", {})["ial_version"] = ial_version
-            with open(path, "w") as f:
-                f.write(tomlkit.dumps(doc))
-        PYEOF
 
     - name: Start suites
       shell: bash

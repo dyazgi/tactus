@@ -14,7 +14,7 @@ on:
       test_config:
         description: Path to the test-suite config (relative to repo root)
         required: false
-        default: tactus/data/tests/atos_bologna_CY50t2.toml
+        default: tactus/data/tests/atos_bologna_CY49t2.toml
       case_selection:
         description: Comma-separated case names to restrict to (empty = all in test_config)
         required: false
@@ -170,7 +170,7 @@ jobs:
         name: Run testbed via tactus
         uses: ./.github/actions/run-testbed
         with:
-          test_config: ${{ github.event.inputs.test_config || vars.TACTUS_TEST_CONFIG || 'tactus/data/tests/atos_bologna_CY50t2.toml' }}
+          test_config: ${{ github.event.inputs.test_config || vars.TACTUS_TEST_CONFIG || 'tactus/data/tests/atos_bologna_CY49t2.toml' }}
           case_selection: ${{ github.event.inputs.case_selection || vars.TACTUS_TESTBED_CASE_SELECTION || '' }}
           ial_version: ${{ steps.resolve.outputs.ial_ref }}
 
