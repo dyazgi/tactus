@@ -73,6 +73,31 @@ jobs:
           fi
           echo "ial_ref=$ial_ref" >> "$GITHUB_OUTPUT"
 
+      - name: Ensure poetry is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v poetry >/dev/null 2>&1; then
+            for dir in "$HOME/.local/bin" "/opt/poetry/bin" "$HOME/.poetry/bin"; do
+              if [ -x "$dir/poetry" ]; then
+                echo "$dir" >> "$GITHUB_PATH"
+                export PATH="$dir:$PATH"
+                break
+              fi
+            done
+          fi
+          if ! command -v poetry >/dev/null 2>&1; then
+            echo "poetry not found on PATH - installing it into the user Python environment"
+            python3 -m pip install --user poetry
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.local/bin:$PATH"
+          fi
+          if ! command -v poetry >/dev/null 2>&1; then
+            echo "::error::poetry still not found on PATH after attempting 'python3 -m pip install --user poetry'. Check that python3/pip are available on this runner." >&2
+            exit 1
+          fi
+          poetry --version
+
       - name: Install the project itself
         run: poetry install --no-interaction --only main,test
 
@@ -101,3 +126,19 @@ jobs:
         with:
           scope: compile
           config_file: ${{ steps.compile.outputs.config_file }}
+
+      - name: Free local disk (poetry venv + cache)
+        # This runner's local disk is small - don't rely on the next job's
+        # checkout clean to reclaim this; free it as soon as this job ends.
+        # .venv is in-project (poetry.toml) so it's local to the checkout;
+        # poetry's download/package cache lives under $HOME and would
+        # otherwise grow unbounded across runs/branches.
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          rm -rf .venv
+          rm -f ci_artifact_casedirs.txt
+          cache_dir=$(poetry config cache-dir 2>/dev/null)
+          [ -n "$cache_dir" ] && rm -rf "$cache_dir"
+          exit 0
