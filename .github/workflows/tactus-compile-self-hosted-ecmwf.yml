@@ -145,7 +145,10 @@ jobs:
           if-no-files-found: warn
 
       - name: Cleanup
-        if: always()
+        # Opt-in so suites/configs survive for debugging during development -
+        # set the repo/org variable TACTUS_ECF_SUITES_AUTO_CLEANUP to 'true' to
+        # auto-remove them; unset (or anything else) leaves them in place.
+        if: always() && vars.TACTUS_ECF_SUITES_AUTO_CLEANUP == 'true'
         uses: ./.github/actions/cleanup-tactus-run
         with:
           scope: compile

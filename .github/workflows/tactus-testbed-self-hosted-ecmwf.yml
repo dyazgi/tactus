@@ -157,7 +157,10 @@ jobs:
           if-no-files-found: warn
 
       - name: Cleanup compile sub-step
-        if: always() && steps.resolve.outputs.should_compile == 'true'
+        # Opt-in so suites/configs survive for debugging during development -
+        # set the repo/org variable TACTUS_ECF_SUITES_AUTO_CLEANUP to 'true' to
+        # auto-remove them; unset (or anything else) leaves them in place.
+        if: always() && steps.resolve.outputs.should_compile == 'true' && vars.TACTUS_ECF_SUITES_AUTO_CLEANUP == 'true'
         uses: ./.github/actions/cleanup-tactus-run
         with:
           scope: compile
@@ -185,7 +188,10 @@ jobs:
           if-no-files-found: warn
 
       - name: Cleanup
-        if: always()
+        # Opt-in so suites/configs survive for debugging during development -
+        # set the repo/org variable TACTUS_ECF_SUITES_AUTO_CLEANUP to 'true' to
+        # auto-remove them; unset (or anything else) leaves them in place.
+        if: always() && vars.TACTUS_ECF_SUITES_AUTO_CLEANUP == 'true'
         uses: ./.github/actions/cleanup-tactus-run
         with:
           scope: testbed
@@ -195,8 +201,9 @@ jobs:
         # Safety net on top of the per-case `tactus remove` above: catches
         # every suite still left for this run's unique tag, even if removing
         # one case crashed and left others behind too (see
-        # scripts/ci/sweep_suites.sh for why).
-        if: always() && steps.testbed.outputs.run_tag != ''
+        # scripts/ci/sweep_suites.sh for why). Same opt-in as the Cleanup
+        # step above.
+        if: always() && steps.testbed.outputs.run_tag != '' && vars.TACTUS_ECF_SUITES_AUTO_CLEANUP == 'true'
         continue-on-error: true
         shell: bash
         run: scripts/ci/sweep_suites.sh "${{ steps.testbed.outputs.run_tag }}"
