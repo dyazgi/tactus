@@ -87,30 +87,40 @@ jobs:
             echo "ial_ref=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Ensure poetry is available
+      - id: ensure_poetry
+        name: Ensure poetry is available (locally, or via HPC ssh fallback)
         shell: bash
         run: |
           set -euo pipefail
-          if ! command -v poetry >/dev/null 2>&1; then
-            for dir in "$HOME/.local/bin" "/opt/poetry/bin" "$HOME/.poetry/bin"; do
-              if [ -x "$dir/poetry" ]; then
-                echo "$dir" >> "$GITHUB_PATH"
-                export PATH="$dir:$PATH"
-                break
-              fi
-            done
+          if command -v python3 >/dev/null 2>&1 && command -v poetry >/dev/null 2>&1; then
+            echo "has_local_poetry=true" >> "$GITHUB_OUTPUT"
+            poetry --version
+            exit 0
           fi
-          if ! command -v poetry >/dev/null 2>&1; then
-            echo "poetry not found on PATH - installing it into the user Python environment"
-            mkdir -p "$HOME/.local/bin"
-            python3 -m pip install --user poetry
-            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-            export PATH="$HOME/.local/bin:$PATH"
-          fi
-          if ! command -v poetry >/dev/null 2>&1; then
-            echo "::error::poetry still not found on PATH after attempting 'python3 -m pip install --user poetry'. Check that python3/pip are available on this runner." >&2
-            exit 1
-          fi
+
+          # This runner has no local python3/poetry - don't try to install
+          # one here. Instead, every subsequent `poetry ...` call in this job
+          # is routed via helper_exec (.github/sh/helpers.sh, copied from the
+          # reference HARMONIE self-hosted CI) over ssh to hpc-batch, the
+          # same host troika.yml's "hpc" site already ssh's to. This relies
+          # on the runner's checkout and the HPC side sharing the same
+          # filesystem/absolute paths, same as troika's own job submission
+          # already assumes.
+          echo "python3/poetry not found locally - routing poetry calls to hpc-batch over ssh instead"
+          echo "has_local_poetry=false" >> "$GITHUB_OUTPUT"
+
+          shim_dir="$RUNNER_TEMP/poetry-remote-shim"
+          mkdir -p "$shim_dir"
+          cat > "$shim_dir/poetry" <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
+          printf -v args '%q ' "$@"
+          helper_exec "cd '$PWD' && poetry $args"
+          EOF
+          chmod +x "$shim_dir/poetry"
+          echo "$shim_dir" >> "$GITHUB_PATH"
+          export PATH="$shim_dir:$PATH"
           poetry --version
 
       - name: Install the project itself
