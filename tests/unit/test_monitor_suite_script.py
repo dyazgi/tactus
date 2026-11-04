@@ -149,8 +149,12 @@ class TestWriteArtifactManifest:
 
     def test_writes_one_casedir_per_line(self, tmp_path):
         targets = [
-            monitor_suite.MonitorTarget("a", "/a/CIMonitor", "/scratch/CASE_a/ci_status.txt"),
-            monitor_suite.MonitorTarget("b", "/b/CIMonitor", "/scratch/CASE_b/ci_status.txt"),
+            monitor_suite.MonitorTarget(
+                "a", "/a/CIMonitor", "/scratch/CASE_a/ci_status.txt"
+            ),
+            monitor_suite.MonitorTarget(
+                "b", "/b/CIMonitor", "/scratch/CASE_b/ci_status.txt"
+            ),
         ]
         manifest = tmp_path / "manifest.txt"
 
@@ -182,7 +186,7 @@ class TestWriteArtifactManifest:
 
         monitor_suite.write_artifact_manifest([], str(manifest))
 
-        assert manifest.read_text(encoding="utf-8") == ""
+        assert not manifest.read_text(encoding="utf-8")
 
 
 class TestSuspendTargets:
