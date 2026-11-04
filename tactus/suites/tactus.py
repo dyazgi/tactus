@@ -55,7 +55,7 @@ class TactusSuiteDefinition(SuiteDefinition):
             self.suite.ecf_node.add_inlimit("max_ecf_tasks", f"/{self.name}")
 
         # Adjust parameters depending on suite_control.mode
-        self.do_prep = True
+        self.do_prep = config["general.surfex"]
         create_static_data = config["suite_control.create_static_data"]
         if config["suite_control.mode"] == "restart":
             self.do_prep = False
@@ -210,5 +210,6 @@ class TactusSuiteDefinition(SuiteDefinition):
                 self.ecf_files,
                 input_template=input_template,
                 trigger=final_cleaning_trigger,
+                variables={"TACTUS_TASK": "Cleaning", "ARGS": "cleaning_type=PostMortem"},
                 ecf_files_remotely=self.ecf_files_remotely,
             )

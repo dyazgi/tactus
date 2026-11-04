@@ -14,6 +14,7 @@ from tactus.datetime_utils import (
     get_decade,
     get_month_list,
 )
+from tactus.eps.eps_setup import get_member_config
 from tactus.host_actions import SelectHost
 from tactus.logs import logger
 from tactus.scheduler import EcflowServer
@@ -25,6 +26,7 @@ from tactus.suites.base import (
     EcflowSuiteTrigger,
     EcflowSuiteTriggers,
 )
+from tactus.suites.da_components import AssimilationFamily
 from tactus.suites.suite_utils import Cycles, lbc_times_generator, slaf_planner
 from tactus.toolbox import Platform
 
@@ -107,17 +109,8 @@ class E923MonthlyFamily(EcflowSuiteFamily):
 
         if config["pgd.one_decade"]:
             month_list = get_month_list(
-                config["general.times.start"], config["general.times.end"]
+                config["general.times.start"], config["general.times.end"], extend=True
             )
-            last_month = month_list[0] - 1
-            if last_month == 0:
-                last_month = 12
-            next_month = month_list[-1] + 1
-            if next_month == 13:
-                next_month = 1
-
-            month_list.insert(0, last_month)
-            month_list.append(next_month)
 
             seasons = {}
             for mm in sorted(month_list):
@@ -417,19 +410,31 @@ class StaticDataTasks:
             )
             archive_static_member_trigger.append(pgd_update)
 
-        if config["general.csc"] == "ALARO" and config["general.surfex"]:
-            pgd_filter_town_frac = PgdNode(
-                "PgdFilterTownFrac",
-                parent,
-                config,
-                task_settings,
-                input_template,
-                ecf_files,
-                trigger=pgd_update,
-                ecf_files_remotely=ecf_files_remotely,
-                limit=limit,
-            )
-            archive_static_member_trigger.append(pgd_filter_town_frac)
+        if config["general.csc"] == "ALARO":
+            if config["general.surfex"]:
+                pgd_filter_town_frac = PgdNode(
+                    "PgdFilterTownFrac",
+                    parent,
+                    config,
+                    task_settings,
+                    input_template,
+                    ecf_files,
+                    trigger=pgd_update,
+                    ecf_files_remotely=ecf_files_remotely,
+                    limit=limit,
+                )
+                archive_static_member_trigger.append(pgd_filter_town_frac)
+            else:
+                e923update = E923UpdateFamily(
+                    parent,
+                    config,
+                    task_settings,
+                    input_template,
+                    ecf_files,
+                    trigger=archive_static_member_trigger,
+                    ecf_files_remotely=ecf_files_remotely,
+                )
+                archive_static_member_trigger.append(e923update)
 
         if config["general.windfarm"] and config["json2tab.enabled"]:
             generate_wfp_tabfile = EcflowSuiteTask(
@@ -473,7 +478,7 @@ class StaticDataTasks:
 
 
 class MirrorFamily(EcflowSuiteFamily):
-    """Class for creating the InputDataFamily ecFlow family."""
+    """Class for creating the MirrorFamily ecFlow family."""
 
     def __init__(
         self,
@@ -623,6 +628,8 @@ class MarsprepFamily(EcflowSuiteFamily):
         ecf_files_remotely=None,
         add_var_trigger=None,
         remote_path=None,
+        forecast_range=None,
+        members=None,
     ):
         """Class initialization."""
         super().__init__(
@@ -631,13 +638,12 @@ class MarsprepFamily(EcflowSuiteFamily):
             ecf_files,
             ecf_files_remotely=ecf_files_remotely,
             trigger=marsprep_trigger_nodes,
+            add_var_trigger=add_var_trigger,
             remote_path=remote_path,
         )
         latlon_deps = ["GG", "SH"]
         latlon_triggers = []
-        args = ""
-        if variables is not None:
-            args = variables.get("ARGS", "")
+        _args = "" if variables is None else variables.get("ARGS", "")
 
         for marstype in marstype_list:
             mars_sub_fam = EcflowSuiteFamily(
@@ -650,7 +656,12 @@ class MarsprepFamily(EcflowSuiteFamily):
             if marstype in latlon_deps:
                 latlon_triggers.append(mars_sub_fam)
 
-            variables = {"ARGS": args + f";type={marstype}"}
+            args = _args + f";type={marstype}"
+            if forecast_range is not None:
+                args += f";forecast_range={forecast_range}"
+            if members is not None:
+                args += f";members={':'.join([str(x) for x in members])}"
+            variables = {"ARGS": args}
 
             EcflowSuiteTask(
                 "Marsprep",
@@ -759,6 +770,69 @@ class InputDataFamily(EcflowSuiteFamily):
                     )
 
 
+class E923UpdateFamily(EcflowSuiteFamily):
+    """Class for creating the E923Update ecFlow family."""
+
+    def __init__(
+        self,
+        parent,
+        config,
+        task_settings: TaskSettings,
+        input_template,
+        ecf_files,
+        trigger=None,
+        ecf_files_remotely=None,
+    ):
+        """Class initialization."""
+        super().__init__(
+            "E923Update",
+            parent,
+            ecf_files,
+            trigger=trigger,
+            ecf_files_remotely=ecf_files_remotely,
+        )
+
+        for flag in ("member_specific_mars_prep", "member_specific_static_data"):
+            if config[f"suite_control.{flag}"]:
+                raise (
+                    NotImplementedError(f"This is not yet implemented for {flag} = True")
+                )
+
+        input_data = MarsprepFamily(
+            self,
+            config,
+            task_settings,
+            input_template,
+            ecf_files,
+            marstype_list=["GG", "SH", "latlon"],
+            ecf_files_remotely=ecf_files_remotely,
+            forecast_range="PT0H",
+            members=[0],
+        )
+
+        prep_task = EcflowSuiteTask(
+            "Prep",
+            self,
+            config,
+            task_settings,
+            ecf_files,
+            input_template=input_template,
+            trigger=input_data,
+            ecf_files_remotely=ecf_files_remotely,
+        )
+
+        EcflowSuiteTask(
+            "E923Update",
+            self,
+            config,
+            task_settings,
+            ecf_files,
+            trigger=prep_task,
+            input_template=input_template,
+            ecf_files_remotely=ecf_files_remotely,
+        )
+
+
 class PrepFamily(EcflowSuiteFamily):
     """Class for creating the PrepFamily ecFlow family."""
 
@@ -855,7 +929,7 @@ class LBCSubFamilyGenerator(EcflowSuiteFamily):
             # Must not exhaust the generator in the planning
             ltg1, ltg2 = tee(lbc_time_generator)
             self.lbc_time_generator = ltg1
-            self.slaf_doer = slaf_planner(config, ltg2, member)
+            self.slaf_doer = slaf_planner(config, ltg2, self.member)
         else:
             self.lbc_time_generator = lbc_time_generator
             self.slaf_doer = {}
@@ -871,12 +945,16 @@ class LBCSubFamilyGenerator(EcflowSuiteFamily):
             interpolation_task_name = "E927"
         for bd_index_time_dict in self.lbc_time_generator:
             bd_index_time_dict_sst = bd_index_time_dict.copy()
-            if (
-                self.config["suite_control.mode"] == "restart" and 0 in bd_index_time_dict
-            ) or (
-                self.config["suite_control.mode"] == "start"
-                and 0 in bd_index_time_dict
-                and not self.is_first_cycle
+
+            mode = self.config["suite_control.mode"]
+            has_bd_index_zero = 0 in bd_index_time_dict
+            is_restart_with_bd_zero = mode == "restart" and has_bd_index_zero
+            is_start_with_bd_zero = (
+                mode == "start" and has_bd_index_zero and not self.is_first_cycle
+            )
+
+            if not self.config["suite_control.do_assimilation"] and (
+                is_restart_with_bd_zero or is_start_with_bd_zero
             ):
                 del bd_index_time_dict[0]
 
@@ -1181,8 +1259,6 @@ class InterpolationFamily(EcflowSuiteFamily):
             add_var_trigger=add_var_trigger,
             remote_path=remote_path,
         )
-        e923_update_task = None
-        csc = config["general.csc"]
 
         is_first_cycle = cycles.current_index == 0
         mode = config["suite_control.mode"]
@@ -1201,24 +1277,6 @@ class InterpolationFamily(EcflowSuiteFamily):
                 ecf_files_remotely=ecf_files_remotely,
             )
 
-            if csc == "ALARO" and not config["general.surfex"]:
-                e923_update_task = EcflowSuiteTask(
-                    "E923Update",
-                    self,
-                    config,
-                    task_settings,
-                    ecf_files,
-                    trigger=prep_fam,
-                    input_template=input_template,
-                    ecf_files_remotely=ecf_files_remotely,
-                )
-
-            if csc == "ALARO":
-                do_prep = False
-
-        if csc == "ALARO" and not config["general.surfex"] and cycles.end_of_month:
-            do_prep = True
-
         lbc_fam = LBCFamily(
             self,
             config,
@@ -1226,7 +1284,6 @@ class InterpolationFamily(EcflowSuiteFamily):
             input_template,
             ecf_files,
             cycles,
-            lbc_family_trigger=e923_update_task,
             ecf_files_remotely=ecf_files_remotely,
             dry_run=dry_run,
             member=member,
@@ -1235,7 +1292,8 @@ class InterpolationFamily(EcflowSuiteFamily):
         if config["suite_control.split_mars_by_step"] and prep_fam is not None:
             lbc_mars_fam = lbc_fam.split_mars_by_step_fam
             lbc_mars_fam_path = prep_fam.make_relative(lbc_mars_fam.path)
-            prep_fam.ecf_node.add_trigger(f"{lbc_mars_fam_path}==complete")
+            if prep_fam.ecf_node is not None:
+                prep_fam.ecf_node.add_trigger(f"{lbc_mars_fam_path}==complete")
 
 
 class InitializationFamily(EcflowSuiteFamily):
@@ -1426,6 +1484,20 @@ class ForecastFamily(EcflowSuiteFamily):
                 ecf_files_remotely=ecf_files_remotely,
             )
 
+        databridge_sel = config.get("archiving.DataBridge.fdb", {})
+        databridge_archiving_active = [v["active"] for v in databridge_sel.values()]
+        if any(databridge_archiving_active):
+            EcflowSuiteTask(
+                "ArchiveDataBridge",
+                self,
+                config,
+                task_settings,
+                ecf_files,
+                input_template=input_template,
+                trigger=fdb_sqlite_trigger,
+                ecf_files_remotely=ecf_files_remotely,
+            )
+
         if config["suite_control.do_extractsqlite"]:
             EcflowSuiteTask(
                 "ExtractSQLite",
@@ -1450,7 +1522,8 @@ class CycleFamily(EcflowSuiteFamily):
         ecf_files,
         trigger=None,
         ecf_files_remotely=None,
-        member=None,
+        interpolation_families=None,
+        cycle_basetime=None,
     ):
         """Class initialization."""
         super().__init__(
@@ -1461,16 +1534,9 @@ class CycleFamily(EcflowSuiteFamily):
             ecf_files_remotely=ecf_files_remotely,
         )
 
-        initialization_family = InitializationFamily(
-            self,
-            config,
-            task_settings,
-            input_template,
-            ecf_files,
-            ecf_files_remotely=ecf_files_remotely,
-        )
-        if member > 0 and (
-            config["perturbations.pertana"] or config["perturbations.pertsurf"]
+        if (
+            config["perturbations.pertana.active"]
+            or config["perturbations.pertsurf.active"]
         ):
             perturbation_family = PerturbationFamily(
                 self,
@@ -1478,11 +1544,26 @@ class CycleFamily(EcflowSuiteFamily):
                 task_settings,
                 input_template,
                 ecf_files,
-                trigger=initialization_family,
+                pertana_trigger=interpolation_families,
                 ecf_files_remotely=ecf_files_remotely,
             )
         else:
-            perturbation_family = initialization_family
+            perturbation_family = trigger
+
+        if config["suite_control.do_assimilation"]:
+            assimilation_family = AssimilationFamily(
+                self,
+                config,
+                task_settings,
+                input_template,
+                ecf_files,
+                trigger=perturbation_family,
+                ecf_files_remotely=ecf_files_remotely,
+                cycle_basetime=cycle_basetime,
+            )
+            forecast_trigger = assimilation_family
+        else:
+            forecast_trigger = perturbation_family
 
         ForecastFamily(
             self,
@@ -1490,7 +1571,7 @@ class CycleFamily(EcflowSuiteFamily):
             task_settings,
             input_template,
             ecf_files,
-            trigger=perturbation_family,
+            trigger=forecast_trigger,
             ecf_files_remotely=ecf_files_remotely,
         )
 
@@ -1547,6 +1628,10 @@ class PostCycleFamily(EcflowSuiteFamily):
                 ecf_files,
                 input_template=input_template,
                 trigger=cleaning_triggers,
+                variables={
+                    "TACTUS_TASK": "Cleaning",
+                    "ARGS": "cleaning_type=CycleCleaning",
+                },
                 ecf_files_remotely=ecf_files_remotely,
             )
             cleaning_triggers.append(cleaning_task)
@@ -1576,6 +1661,7 @@ class PerturbationFamily(EcflowSuiteFamily):
         input_template,
         ecf_files,
         trigger=None,
+        pertana_trigger=None,
         ecf_files_remotely=None,
     ):
         """Class initialization."""
@@ -1587,7 +1673,9 @@ class PerturbationFamily(EcflowSuiteFamily):
             ecf_files_remotely=ecf_files_remotely,
         )
 
-        if config["perturbations.pertana"]:
+        if config["perturbations.pertana.active"]:
+            _pertana_trigger = pertana_trigger.get(0) if pertana_trigger else None
+
             EcflowSuiteTask(
                 "Pertana",
                 self,
@@ -1595,10 +1683,11 @@ class PerturbationFamily(EcflowSuiteFamily):
                 task_settings,
                 ecf_files,
                 input_template=input_template,
+                trigger=_pertana_trigger,
                 ecf_files_remotely=ecf_files_remotely,
             )
 
-        if config["perturbations.pertsurf"]:
+        if config["perturbations.pertsurf.active"]:
             EcflowSuiteTask(
                 "Pertsurf",
                 self,
@@ -1606,12 +1695,16 @@ class PerturbationFamily(EcflowSuiteFamily):
                 task_settings,
                 ecf_files,
                 input_template=input_template,
+                trigger=trigger,
                 ecf_files_remotely=ecf_files_remotely,
             )
 
 
 class TimeDependentFamily(EcflowSuiteFamily):
-    """Class for creating the time dependent part of a tactus suite."""
+    """Class for creating the time dependent part of a tactus suite.
+
+    Extra nodes per cycle can be added by overriding ``add_time_family_nodes``.
+    """
 
     def __init__(
         self,
@@ -1751,6 +1844,8 @@ class TimeDependentFamily(EcflowSuiteFamily):
             member_families: List[EcflowSuiteFamily] = []
             member_cycle_families: List[EcflowSuiteFamily] = []
             for member in config["eps.general.members"]:
+                member_config = get_member_config(config, member=member)
+
                 member_family = EcflowSuiteFamily(
                     f"mbr{member:03d}",
                     time_family,
@@ -1761,7 +1856,7 @@ class TimeDependentFamily(EcflowSuiteFamily):
                 member_families.append(member_family)
 
                 mbr_trigger = trigger
-                if config["suite_control.member_specific_static_data"]:
+                if member_config["suite_control.member_specific_static_data"]:
                     # If trigger has static_data_members, then let each member family
                     # trigger on the corresponding static_data_member
                     try:
@@ -1772,7 +1867,7 @@ class TimeDependentFamily(EcflowSuiteFamily):
                             f"in trigger. Using trigger {trigger}"
                         )
 
-                if config["suite_control.member_specific_mars_prep"]:
+                if member_config["suite_control.member_specific_mars_prep"]:
                     external_marsprep_trigger_nodes = [
                         prev_interpolation_triggers.get(member)
                     ]
@@ -1784,7 +1879,7 @@ class TimeDependentFamily(EcflowSuiteFamily):
 
                     inputdata = InputDataFamily(
                         member_family,
-                        config,
+                        member_config,
                         task_settings,
                         input_template,
                         ecf_files,
@@ -1795,10 +1890,10 @@ class TimeDependentFamily(EcflowSuiteFamily):
                     )
                     ready_for_cycle = inputdata
 
-                if config["suite_control.interpolate_boundaries"]:
+                if member_config["suite_control.interpolate_boundaries"]:
                     int_family = InterpolationFamily(
                         member_family,
-                        config,
+                        member_config,
                         task_settings,
                         input_template,
                         ecf_files,
@@ -1824,20 +1919,21 @@ class TimeDependentFamily(EcflowSuiteFamily):
 
                 cycle_family = CycleFamily(
                     member_family,
-                    config,
+                    member_config,
                     task_settings,
                     input_template,
                     ecf_files,
                     trigger=ready_for_cycle,
                     ecf_files_remotely=ecf_files_remotely,
-                    member=member,
+                    interpolation_families=prev_interpolation_triggers,
+                    cycle_basetime=cycle.basetime,
                 )
                 member_cycle_families.append(cycle_family)
                 prev_cycle_triggers[member] = [cycle_family]
 
                 postcycle_families[member] = PostCycleFamily(
                     member_family,
-                    config,
+                    member_config,
                     task_settings,
                     input_template,
                     ecf_files,
@@ -1860,6 +1956,41 @@ class TimeDependentFamily(EcflowSuiteFamily):
                     input_template=input_template,
                     ecf_files_remotely=ecf_files_remotely,
                 )
+
+            self.add_time_family_nodes(
+                time_family,
+                config,
+                task_settings,
+                input_template,
+                ecf_files,
+                member_cycle_families,
+                ecf_files_remotely=ecf_files_remotely,
+            )
+
+    def add_time_family_nodes(
+        self,
+        time_family,
+        config,
+        task_settings: TaskSettings,
+        input_template,
+        ecf_files,
+        member_cycle_families: List[EcflowSuiteFamily],
+        ecf_files_remotely=None,
+    ):
+        """Add extra nodes to the time family of each cycle.
+
+        Called once per cycle after all member families have been created.
+        Does nothing by default; override in a subclass to add nodes.
+
+        Args:
+            time_family: The time family of the current cycle.
+            config: Experiment config.
+            task_settings: Submission configuration.
+            input_template: ecFlow job template.
+            ecf_files: Local ecf script path prefix.
+            member_cycle_families: The cycle families of all members.
+            ecf_files_remotely: Remote ecf script path prefix.
+        """
 
     @property
     def last_node(self):

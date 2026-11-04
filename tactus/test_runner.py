@@ -19,7 +19,7 @@ from .config_parser import BasicConfig, ConfigPaths, ParsedConfig
 from .datetime_utils import evaluate_date
 from .experiment import get_git_info
 from .fullpos import flatten_list
-from .general_utils import merge_dicts
+from .general_utils import merge_dicts, sanitize_case_name
 from .host_actions import TactusHost
 from .logs import logger
 from .reference_checker import CheckSummaryAnalysis
@@ -66,7 +66,7 @@ class TestCases:
         self.modifs = definitions["modifs"]
         self.refchecks = definitions.get("refchecks", {})
         self.genchecks = definitions.get("genchecks", {})
-        self.test_dir = definitions.get("test_dir", f"{self.tag}_configs")
+        self.test_dir = definitions.get("test_dir", f"ttr-configs/{self.tag}_configs")
         self.ial = definitions.get("ial", {})
         self.gl = definitions.get("gl", {})
         self.selection = self.resolve_selection(definitions)
@@ -157,10 +157,7 @@ class TestCases:
     def get_tactus_version(self):
         """Get tactus version info."""
         tactus_git = get_git_info()
-        tag = tactus_git["branch"]
-        for character in ["/", ".", "-"]:
-            tag = tag.replace(character, "_")
-        return tag
+        return sanitize_case_name(tactus_git["branch"])
 
     def create(self, cases=None):
         """Create the modif files and populate self.cmds for the given cases.
@@ -301,12 +298,14 @@ class TestCases:
         cases = flatten_list(self._build_levels())
         for case in cases:
             config_name = config_names["config_names"][case]
+            prefix_file = f"{self.test_dir}/{config_name}"
+            config_file = f"{prefix_file}.toml"
             if self.mode == "task":
                 cmds = [
                     [
                         "run",
                         "--config-file",
-                        f"{self.test_dir}/{config_name}.toml",
+                        config_file,
                         "--task",
                         task,
                         "--job",
@@ -317,26 +316,40 @@ class TestCases:
                     for task in self.cases[case]["tasks"]
                 ]
             else:
-                suitefile = f"{self.test_dir}/{config_name}.def"
+                suite_file = f"{prefix_file}.def"
                 cmds = [
                     [
                         "start",
                         "suite",
                         "--config-file",
-                        f"{self.test_dir}/{config_name}.toml",
+                        config_file,
                         "-f",
-                        suitefile,
+                        suite_file,
                         "-k",
-                    ]
+                    ],
                 ]
+
+                # Make sure we remove the case before launching, if requested
+                if self.cases[case].get("clean", True):
+                    cmds.insert(
+                        0,
+                        [
+                            "remove",
+                            "-f",
+                            "--execute-removal",
+                            "--config-file",
+                            config_file,
+                            config_file,
+                        ],
+                    )
 
             for cmd in cmds:
                 cmd_txt = " ".join(cmd)
                 logger.info("Use cmd:\n\n{}\n\n", cmd_txt)
 
                 if not self.dry:
-                    if self.mode != "task" and os.path.exists(suitefile):
-                        os.remove(suitefile)
+                    if self.mode != "task" and os.path.exists(suite_file):
+                        os.remove(suite_file)
                     tactus_main(cmd)
 
     def get_binaries(self):

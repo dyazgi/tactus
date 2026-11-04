@@ -4,11 +4,11 @@ import ast
 import contextlib
 import os
 from functools import cached_property
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from tactus.boundary_utils import Boundary
-from tactus.datetime_utils import as_datetime, as_timedelta
+from tactus.datetime_utils import as_datetime, as_timedelta, evaluate_date
 from tactus.eps.eps_setup import get_member_config, infer_members
 from tactus.logs import logger
 from tactus.mars_utils import (
@@ -34,7 +34,6 @@ from tactus.mars_utils import (
     write_write_mars_req,
 )
 from tactus.os_utils import join_files, list_files_join, tactusmakedirs
-from tactus.scheduler import EcflowServer
 from tactus.tasks.base import Task
 from tactus.tasks.batch import BatchJob
 
@@ -69,17 +68,26 @@ class Marsprep(Task):
                 member_config = get_member_config(self.config, member_)
                 bdmember_config_value = member_config["boundaries.ifs.bdmember"]
 
-        # Get bdmember(s) from eps members settings (attempted first) or
-        # boundaries.ifs.bdmember.
+            self.bdmember = infer_members(self.platform.substitute(bdmember_config_value))
+
         else:
             try:
-                bdmember_config_value = self.config[
-                    "eps.member_settings.boundaries.ifs.bdmember"
-                ]
+                _members = str(config["task.args.members"])
+                members = [int(x) for x in _members.split(":")]
             except KeyError:
-                bdmember_config_value = self.config["boundaries.ifs.bdmember"]
+                members = self.config["eps.general.members"]
+            bdmembers = set()
+            for member in members:
+                member_config = get_member_config(self.config, member)
+                try:
+                    member_bdmember_value = member_config["boundaries.ifs.bdmember"]
+                except KeyError:
+                    member_bdmember_value = self.config["boundaries.ifs.bdmember"]
+                bdmembers.update(
+                    infer_members(self.platform.substitute(member_bdmember_value))
+                )
+            self.bdmember = sorted(bdmembers)
 
-        self.bdmember = infer_members(self.platform.substitute(bdmember_config_value))
         # Default to [None] if self.bdmember is empty to cover the deterministic
         # case with no boundary member nesting.
         if not self.bdmember:
@@ -98,7 +106,10 @@ class Marsprep(Task):
 
         # Get the times from config.toml
         self.basetime = as_datetime(self.config["general.times.basetime"])
-        forecast_range = as_timedelta(self.config["general.times.forecast_range"])
+        try:
+            forecast_range = as_timedelta(self.config["task.args.forecast_range"])
+        except KeyError:
+            forecast_range = as_timedelta(self.config["general.times.forecast_range"])
 
         # Get boundary informations
         self.boundary = Boundary(config)
@@ -120,7 +131,7 @@ class Marsprep(Task):
             )
             exist_snow = True
 
-        start_snow_date = as_datetime(self.mars["start_date"])
+        start_snow_date = as_datetime(evaluate_date(self.mars["start_date"]))
         with contextlib.suppress(KeyError):
             start_snow_date = as_datetime(self.mars["start_snow_date"])
 
@@ -255,13 +266,6 @@ class Marsprep(Task):
                 )
         except OSError as e:
             raise RuntimeError(f"Error while preparing the mars folder: {e}") from e
-
-        # Suspend the model task if there is a mirroring
-        if self.config["suite_control.mirror_globalDT"]:
-            current_path = PurePosixPath(os.environ["ECF_NAME"])
-            model_path = current_path.parents[1] / "Mirrors"
-            server = EcflowServer(self.config)
-            server.suspend(str(model_path))
 
         if self.split_mars_by_step and self.prep_step:
             logger.debug("*** Need only latlon data")
@@ -749,7 +753,7 @@ class Marsprep(Task):
             levtype=lev_type,
             param=param,
             steps=[0],
-            members=[first_member],
+            members=[0],
             target=target,
             prefetch=prefetch,
             specify_domain=True,
