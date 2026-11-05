@@ -27,11 +27,12 @@ on:
 env:
   GITHUB_TOKEN: ${{ secrets.GH_REPO_READ_TOKEN }}
   # Empty (not a hardcoded default) unless the repo/org variable is set -
-  # see run-compile/action.yml: with neither set, CI submits with no
-  # account/QOS override at all, identical to a plain manual `tactus
-  # compile` run.
+  # see run-compile/action.yml: with it unset, CI submits with no account
+  # override at all, identical to a plain manual `tactus compile` run. No
+  # equivalent QOS variable on purpose - see run-compile/action.yml for why
+  # forcing one QOS across every submission type is actively wrong, not
+  # just unnecessary.
   TACTUS_WLM_ACCOUNT: ${{ vars.TACTUS_WLM_ACCOUNT }}
-  TACTUS_WLM_QOS: ${{ vars.TACTUS_WLM_QOS }}
   TACTUS_POLL_INTERVAL_SECONDS: ${{ vars.TACTUS_POLL_INTERVAL_SECONDS }}
   TACTUS_SUITE_TIMEOUT_MINUTES: ${{ vars.TACTUS_SUITE_TIMEOUT_MINUTES }}
   # poetry.toml sets virtualenvs.options.system-site-packages = true (likely
@@ -119,7 +120,7 @@ jobs:
           set -euo pipefail
           source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
           printf -v args '%q ' "$@"
-          # TACTUS_WLM_ACCOUNT/TACTUS_WLM_QOS no longer need forwarding here:
+          # TACTUS_WLM_ACCOUNT no longer needs forwarding here:
           # run-compile/action.yml resolves them to literal values in its
           # own (local) bash step, before ever invoking poetry/tactus -
           # nothing downstream of this shim depends on them being present in

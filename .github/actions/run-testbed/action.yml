@@ -59,35 +59,48 @@ runs:
         # cases stay consistent (see the "Fix 7" note in the plan for why a
         # post-hoc rename would break host= dependencies instead).
         #
-        # Any CI-only submission overrides (account/QOS/ial_version) are
-        # applied via [general].extra - the same native config-mods
-        # mechanism `tactus case` uses, that TestCases.create()
-        # (tactus/test_runner.py) already splices into every case's own
-        # `tactus case <base> <extra...> <outfile>` invocation. That runs
-        # per-case at generation time, through ExpFromFiles' own deep-merge
-        # + schema validation, BEFORE host=-dependency resolution.
+        # Any CI-only submission overrides (account/ial_version) are applied
+        # via [general].extra - the same native config-mods mechanism
+        # `tactus case` uses, that TestCases.create() (tactus/test_runner.py)
+        # already splices into every case's own `tactus case <base>
+        # <extra...> <outfile>` invocation. That runs per-case at generation
+        # time, through ExpFromFiles' own deep-merge + schema validation,
+        # BEFORE host=-dependency resolution.
         #
-        # TACTUS_WLM_ACCOUNT/TACTUS_WLM_QOS are resolved to literal values
-        # right here, in plain bash, rather than written as @MACRO@
-        # placeholders for tactus to substitute later via os_macros - two
-        # reasons: (1) it means a CI run with neither variable set generates
-        # literally no extra mod file at all, so submission is byte-for-byte
-        # identical to a plain manual `tactus test -c ... -m -r` - no
-        # account/QOS override unless one is explicitly configured; (2) it
-        # sidesteps a real bug (now also fixed at the source in
-        # tactus/submission.py) where the "account" BATCH fallback never
-        # went through Platform.substitute(), so a macro there was silently
-        # left unexpanded in the generated job script and rejected by sbatch.
+        # QOS is deliberately NOT overridden here at all (no TACTUS_WLM_QOS
+        # variable exists): unlike account, every submission type already
+        # has a correct, type-specific default
+        # QOS (tactus/data/config_files/include/submission/atos_bologna.toml
+        # - e.g. "parallel" gets "np", "gnu"/"serial" get "nf"). A past
+        # version of this override forced the SAME QOS across every type,
+        # which silently downgraded "parallel" tasks (e.g. Prep, a 32-way
+        # MPI srun) from "np" to "nf" - a QOS that doesn't permit that many
+        # processors, and SLURM rejected the job with "More processors
+        # requested than permitted". A manual `tactus test -m -r` run (no
+        # override at all) doesn't hit this, since it keeps each type's own
+        # correct QOS.
+        #
+        # TACTUS_WLM_ACCOUNT is resolved to a literal value right here, in
+        # plain bash, rather than written as an @MACRO@ placeholder for
+        # tactus to substitute later via os_macros - two reasons: (1) it
+        # means a CI run with it unset generates literally no extra mod file
+        # at all, so submission is byte-for-byte identical to a plain manual
+        # `tactus test -c ... -m -r` - no account override unless one is
+        # explicitly configured; (2) it sidesteps a real bug (now also fixed
+        # at the source in tactus/submission.py) where the "account" BATCH
+        # fallback never went through Platform.substitute(), so a macro
+        # there was silently left unexpanded in the generated job script and
+        # rejected by sbatch.
         config_file="ci_run_$(basename "${{ inputs.test_config }}")"
         safe_branch=$(echo "${{ github.ref_name }}" | tr -c 'A-Za-z0-9._-' '_')
         run_tag="${safe_branch}_${{ github.run_id }}_${{ github.run_attempt }}"
         poetry run python - "${{ inputs.test_config }}" "$config_file" "${{ inputs.case_selection }}" "$run_tag" \
           ci_submission_override.toml \
-          "${TACTUS_WLM_ACCOUNT:-}" "${TACTUS_WLM_QOS:-}" "${{ inputs.ial_version }}" <<'PYEOF'
+          "${TACTUS_WLM_ACCOUNT:-}" "${{ inputs.ial_version }}" <<'PYEOF'
         import sys
         import tomlkit
 
-        src, dest, selection, run_tag, mod_path, account, qos, ial_version = sys.argv[1:9]
+        src, dest, selection, run_tag, mod_path, account, ial_version = sys.argv[1:8]
         doc = tomlkit.parse(open(src).read())
         if selection:
             doc["general"]["selection"] = [c.strip() for c in selection.split(",") if c.strip()]
@@ -98,15 +111,6 @@ runs:
         override = {}
         if account:
             override.setdefault("submission", {})["account"] = f"#SBATCH --account={account}"
-        if qos:
-            qos_line = f"#SBATCH --qos={qos}"
-            submission = override.setdefault("submission", {})
-            submission["types"] = {
-                t: {"BATCH": {"QOS": qos_line}} for t in ("gnu", "parallel", "serial")
-            }
-            submission["task_exceptions"] = {
-                t: {"BATCH": {"QOS": qos_line}} for t in ("TactusBundleBuild", "Marsprep")
-            }
         if ial_version:
             override.setdefault("submission", {})["ial_version"] = ial_version
 
