@@ -1,0 +1,61 @@
+name: Ensure poetry is available
+description: >-
+  Checks for an adequate local python3 (>=3.10) + poetry; if unavailable,
+  wires up a poetry shim that routes every subsequent `poetry ...` call in
+  this job over ssh to hpc-batch instead. Shared by the compile and testbed
+  self-hosted workflows - was duplicated verbatim between them before.
+
+outputs:
+  has_local_poetry:
+    description: "'true' if poetry runs locally on this runner, 'false' if routed to hpc-batch over ssh"
+    value: ${{ steps.ensure.outputs.has_local_poetry }}
+
+runs:
+  using: composite
+  steps:
+    - id: ensure
+      name: Ensure poetry is available (locally, or via HPC ssh fallback)
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        has_adequate_python() {
+          command -v python3 >/dev/null 2>&1 &&
+            python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'
+        }
+
+        if has_adequate_python && command -v poetry >/dev/null 2>&1; then
+          echo "has_local_poetry=true" >> "$GITHUB_OUTPUT"
+          python3 --version
+          poetry --version
+          exit 0
+        fi
+
+        # This runner itself has no local python3, and doesn't need one - it
+        # also doesn't need ecflow installed locally, since that's provided
+        # by the HPC's own module system, not this host. Every subsequent
+        # `poetry ...` call in this job is routed via helper_ml_exec
+        # (.github/sh/helpers.sh, copied from the reference HARMONIE
+        # self-hosted CI) over ssh to hpc-batch, the same host troika.yml's
+        # "hpc" site already ssh's to - which itself does
+        # `module load python3/3.10.10-01` / `module load ecflow` before
+        # running anything (see helper_ml_exec), the same two commands every
+        # HPC-submitted job already runs. This relies on the runner's
+        # checkout and the HPC side sharing the same filesystem/absolute
+        # paths, same as troika's own job submission already assumes.
+        echo "python3 not found locally - routing poetry calls to hpc-batch over ssh instead"
+        echo "has_local_poetry=false" >> "$GITHUB_OUTPUT"
+
+        shim_dir="$RUNNER_TEMP/poetry-remote-shim"
+        mkdir -p "$shim_dir"
+        cat > "$shim_dir/poetry" <<'EOF'
+        #!/bin/bash
+        set -euo pipefail
+        source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
+        printf -v args '%q ' "$@"
+        helper_ml_exec "cd '$PWD' && poetry $args"
+        EOF
+        chmod +x "$shim_dir/poetry"
+        echo "$shim_dir" >> "$GITHUB_PATH"
+        export PATH="$shim_dir:$PATH"
+        poetry --version

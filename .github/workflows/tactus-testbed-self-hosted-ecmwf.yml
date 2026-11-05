@@ -80,6 +80,17 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Free local disk (poetry venv + cache)
+        # Don't rely solely on actions/checkout's default `git clean -ffdx`
+        # to start from a clean state - that only ever covers files inside
+        # the checkout (.venv included, since poetry.toml puts it
+        # in-project); poetry's download/package cache lives under $HOME,
+        # entirely outside the checkout, so it's never touched by checkout
+        # and would otherwise grow unbounded forever without this.
+        uses: ./.github/actions/free-local-disk
+        with:
+          extra_patterns: ci_run_*.toml
+
       - name: Set github credentials
         uses: ./.github/actions/setup-github-credentials
         with:
@@ -90,13 +101,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ial_tag="${{ github.event.inputs.ial_tag }}"
-          ial_git_version="${{ github.event.inputs.ial_git_version }}"
-          if [ -n "$ial_tag" ] && [ -n "$ial_git_version" ]; then
-            echo "::error::Only one of ial_tag / ial_git_version may be set, not both." >&2
-            exit 1
-          fi
-          ial_ref="${ial_tag}${ial_git_version}"
+          source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
+          ial_ref=$(ci_resolve_ial_ref "${{ github.event.inputs.ial_tag }}" "${{ github.event.inputs.ial_git_version }}")
           if [ -n "$ial_ref" ]; then
             echo "should_compile=true" >> "$GITHUB_OUTPUT"
             echo "ial_ref=$ial_ref" >> "$GITHUB_OUTPUT"
@@ -106,92 +112,11 @@ jobs:
           fi
 
       - id: ensure_poetry
-        name: Ensure poetry is available (locally with an adequate python, or via HPC ssh fallback)
-        shell: bash
-        run: |
-          set -euo pipefail
+        name: Ensure poetry is available
+        uses: ./.github/actions/ensure-poetry
 
-          # README.md's own Atos setup instructions require
-          # `module load python3/3.10.10-01` (plus `module load ecflow`) -
-          # this runner's own default python3 can be too old on its own
-          # (observed: 3.8.8; tactus needs >=3.10 per pyproject.toml's
-          # requires-python). `module` itself needs Lmod's init script
-          # sourced first - GH Actions runs steps via `bash --noprofile
-          # --norc`, which skips whatever profile would normally do that.
-          # Best-effort: harmless if this isn't Atos, or if python3 was
-          # already adequate without it.
-          lmod_init=/usr/local/apps/lmod/8.6.8/init/bash
-          if [ -f "$lmod_init" ]; then
-            # shellcheck disable=SC1090
-            source "$lmod_init"
-            module load python3/3.10.10-01 ecflow || true
-          fi
-
-          has_adequate_python() {
-            command -v python3 >/dev/null 2>&1 &&
-              python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'
-          }
-
-          if has_adequate_python && command -v poetry >/dev/null 2>&1; then
-            echo "has_local_poetry=true" >> "$GITHUB_OUTPUT"
-            python3 --version
-            poetry --version
-
-            # Every subsequent step (and every composite-action step, e.g.
-            # run-testbed/action.yml, run-compile/action.yml) is a fresh
-            # shell that does NOT have the module above loaded - its
-            # PATH/env changes don't otherwise survive past this step. Wrap
-            # `poetry` in a shim that re-applies the same module load on
-            # every invocation instead of trying to persist the whole
-            # environment across steps.
-            poetry_bin=$(command -v poetry)
-            shim_dir="$RUNNER_TEMP/poetry-module-shim"
-            mkdir -p "$shim_dir"
-            cat > "$shim_dir/poetry" <<EOF
-          #!/bin/bash
-          set -euo pipefail
-          if [ -f "$lmod_init" ]; then
-            source "$lmod_init"
-            module load python3/3.10.10-01 ecflow || true
-          fi
-          exec "$poetry_bin" "\$@"
-          EOF
-            chmod +x "$shim_dir/poetry"
-            echo "$shim_dir" >> "$GITHUB_PATH"
-            exit 0
-          fi
-
-          # Still no adequate python3/poetry, even after module load - don't
-          # try to install one here. Instead, every subsequent `poetry ...`
-          # call in this job is routed via helper_exec
-          # (.github/sh/helpers.sh, copied from the reference HARMONIE
-          # self-hosted CI) over ssh to hpc-batch, the same host
-          # troika.yml's "hpc" site already ssh's to. This relies on the
-          # runner's checkout and the HPC side sharing the same
-          # filesystem/absolute paths, same as troika's own job submission
-          # already assumes - and on hpc-batch's own login shell already
-          # having an adequate python3/poetry via its default profile.
-          echo "python3>=3.10/poetry not found locally, even after module load - routing poetry calls to hpc-batch over ssh instead"
-          echo "has_local_poetry=false" >> "$GITHUB_OUTPUT"
-
-          shim_dir="$RUNNER_TEMP/poetry-remote-shim"
-          mkdir -p "$shim_dir"
-          cat > "$shim_dir/poetry" <<'EOF'
-          #!/bin/bash
-          set -euo pipefail
-          source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
-          printf -v args '%q ' "$@"
-          # TACTUS_WLM_ACCOUNT no longer needs forwarding here:
-          # run-testbed/action.yml and run-compile/action.yml resolve them to
-          # literal values in their own (local) bash steps, before ever
-          # invoking poetry/tactus - nothing downstream of this shim depends
-          # on them being present in the remote environment.
-          helper_exec "cd '$PWD' && poetry $args"
-          EOF
-          chmod +x "$shim_dir/poetry"
-          echo "$shim_dir" >> "$GITHUB_PATH"
-          export PATH="$shim_dir:$PATH"
-          poetry --version
+      - name: Point .venv at $SCRATCH
+        uses: ./.github/actions/setup-venv-scratch
 
       - name: Install the project itself
         run: poetry install --no-interaction --only main,test
@@ -266,17 +191,7 @@ jobs:
         run: scripts/ci/sweep_suites.sh "${{ steps.testbed.outputs.run_tag }}"
 
       - name: Free local disk (poetry venv + cache)
-        # This runner's local disk is small - don't rely on the next job's
-        # checkout clean to reclaim this; free it as soon as this job ends.
-        # .venv is in-project (poetry.toml) so it's local to the checkout;
-        # poetry's download/package cache lives under $HOME and would
-        # otherwise grow unbounded across runs/branches.
         if: always()
-        shell: bash
-        run: |
-          set +e
-          rm -rf .venv
-          rm -f ci_run_*.toml ci_artifact_casedirs.txt
-          cache_dir=$(poetry config cache-dir 2>/dev/null)
-          [ -n "$cache_dir" ] && rm -rf "$cache_dir"
-          exit 0
+        uses: ./.github/actions/free-local-disk
+        with:
+          extra_patterns: ci_run_*.toml

@@ -1,0 +1,67 @@
+name: Monitor tactus suite
+description: >-
+  Polls a submitted tactus suite's CIMonitor task(s) (scripts/ci/monitor_suite.py)
+  until terminal state or timeout, and summarizes PASS/FAIL for GitHub Actions.
+  Shared by run-compile and run-testbed - was duplicated near-identically between
+  them before.
+
+inputs:
+  mode:
+    description: "compile or testbed (passed through to scripts/ci/monitor_suite.py --mode)"
+    required: true
+  config_file:
+    description: >-
+      For mode=compile: the resolved compile-suite config file. For
+      mode=testbed: the top-level test-runner config file passed to
+      `tactus test -c` (after -m -r have been run).
+    required: true
+  default_timeout_minutes:
+    description: Fallback for --timeout-minutes if TACTUS_SUITE_TIMEOUT_MINUTES isn't set
+    required: true
+
+outputs:
+  artifact_paths:
+    description: >-
+      Newline-separated @CASEDIR@ paths (on HPC scratch) holding
+      ci_status.txt/summary.json/summary.txt/*.diff for this run - NOT under
+      the runner's local checkout. Feed this directly into
+      actions/upload-artifact's `path:` input.
+    value: ${{ steps.monitor.outputs.artifact_paths }}
+  status:
+    description: PASS or FAIL
+    value: ${{ steps.monitor.outputs.status }}
+
+runs:
+  using: composite
+  steps:
+    - id: monitor
+      name: Follow suite(s) and summarize
+      shell: bash
+      run: |
+        set -o pipefail
+        set +e
+        poetry run python scripts/ci/monitor_suite.py \
+          --mode "${{ inputs.mode }}" \
+          --config "${{ inputs.config_file }}" \
+          --poll-interval-seconds "${{ env.TACTUS_POLL_INTERVAL_SECONDS || '60' }}" \
+          --timeout-minutes "${{ env.TACTUS_SUITE_TIMEOUT_MINUTES || inputs.default_timeout_minutes }}" \
+          --artifact-manifest ci_artifact_casedirs.txt
+        rc=$?
+        set -e
+
+        # monitor_suite.py may have crashed/timed out before ever writing the
+        # manifest - don't let a missing file here (sed failing under this
+        # shell's default -e) also corrupt the GITHUB_OUTPUT multiline write
+        # below with an unclosed delimiter, masking the real error above with
+        # a second, unrelated-looking one.
+        artifact_paths=""
+        if [ -f ci_artifact_casedirs.txt ]; then
+          artifact_paths=$(sed 's#$#/**#' ci_artifact_casedirs.txt)
+        fi
+        {
+          echo "artifact_paths<<EOF_ARTIFACT_PATHS"
+          echo "$artifact_paths"
+          echo "EOF_ARTIFACT_PATHS"
+        } >> "$GITHUB_OUTPUT"
+        echo "status=$([ $rc -eq 0 ] && echo PASS || echo FAIL)" >> "$GITHUB_OUTPUT"
+        exit $rc

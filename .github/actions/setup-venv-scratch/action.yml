@@ -1,0 +1,44 @@
+name: Point .venv at $SCRATCH
+description: >-
+  Symlinks .venv (poetry.toml's virtualenvs.in-project path) at a directory
+  under $SCRATCH instead of leaving its real content on this runner's own
+  small-quota disk. $SCRATCH is the same NFS-shared filesystem the HPC side
+  already uses - confirmed by generated job scripts referencing this
+  checkout's absolute paths directly - just with a much larger quota, unlike
+  the $HOME/$PERM-tier mount this runner's own checkout sits on. Namespaced
+  by this run's GITHUB_RUN_ID so concurrent runs (different branches on
+  tactus-compile, or a testbed run's own compile sub-step) never collide on
+  the same .venv.
+
+runs:
+  using: composite
+  steps:
+    - name: Point .venv at $SCRATCH
+      shell: bash
+      run: |
+        set -euo pipefail
+        source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
+
+        # This runner's own shell may not have $SCRATCH set (it's normally
+        # provided by a login profile this non-interactive service doesn't
+        # source) - fall back to asking hpc-batch, which always has it.
+        scratch="${SCRATCH:-}"
+        if [ -z "$scratch" ]; then
+          scratch=$(helper_getVar SCRATCH)
+        fi
+        if [ -z "$scratch" ]; then
+          echo "::warning::Could not resolve \$SCRATCH (locally or via hpc-batch) - leaving .venv on this runner's own disk instead."
+          exit 0
+        fi
+
+        venv_target="$scratch/tactus/github-runner/$GITHUB_RUN_ID/.venv"
+        rm -rf "$venv_target"
+        # The target must already exist as a real (empty) directory before
+        # the symlink is created - a symlink dangling at creation time is
+        # itself a valid directory entry, so anything that later tries to
+        # create ".venv" through it (poetry's own venv creation included)
+        # sees "already exists" and fails, rather than transparently
+        # creating through to the real target.
+        mkdir -p "$venv_target"
+        rm -rf .venv
+        ln -s "$venv_target" .venv
