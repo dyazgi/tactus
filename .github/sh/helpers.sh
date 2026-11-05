@@ -34,12 +34,10 @@ function helper_ml_exec(){
 # The runner has no python/module/$SCRATCH: run every poetry/python command
 # through this. Runs "$@" on hpc-batch in the caller's $PWD, with the
 # project .venv (once it exists) activated.
-# SYSTEM_SITE_PACKAGES=false: jobs load other modules than install time
-# (seen: ModuleNotFoundError marshmallow in a job after a green install).
 function helper_py_exec(){
     local args
     printf -v args '%q ' "$@"
-    helper_ml_exec "cd '$PWD' && export POETRY_VIRTUALENVS_OPTIONS_SYSTEM_SITE_PACKAGES=false && { [ ! -f .venv/bin/activate ] || source .venv/bin/activate; } && $args"
+    helper_ml_exec "cd '$PWD' && { [ ! -f .venv/bin/activate ] || source .venv/bin/activate; } && $args"
 }
 
 function helper_getVar(){

@@ -21,8 +21,9 @@ runs:
         venv_target="$scratch/tactus/github-runner/$GITHUB_RUN_ID/.venv"
         # A real venv, not an empty dir: poetry takes any existing .venv for a venv
         # and fails on a bare `python`. venv refuses a symlink path, so create it at the target.
+        # System site-packages: the ecflow bindings live in the module python, not on PYTHONPATH.
         helper_exec "rm -rf '$venv_target'"
-        helper_ml_exec "python3 -m venv '$venv_target'"
+        helper_ml_exec "python3 -m venv --system-site-packages '$venv_target' && '$venv_target/bin/python' -c 'import ecflow'"
 
         rm -rf .venv
         ln -s "$venv_target" .venv
