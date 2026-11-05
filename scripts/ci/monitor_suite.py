@@ -127,7 +127,11 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
 
 
 def _resolve_casedir(config: ParsedConfig) -> str:
-    return Platform(config).get_system_value("casedir")
+    # Date macros (@YMD_START@) in system.casedir need the case start time, as in the task.
+    start = config.get("general.times.start", None)
+    return Platform(config).substitute(
+        config["system.casedir"], basetime=start, validtime=start
+    )
 
 
 def discover_compile_targets(config_file: str) -> list[MonitorTarget]:
