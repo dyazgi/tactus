@@ -25,15 +25,17 @@ function helper_exec(){
     helper_ssh "$cmd"
 }
 
-# helper_exec with python3/ecflow modules loaded and ~/.local/bin (poetry) on PATH.
+# helper_exec with python3/ecflow modules loaded.
 function helper_ml_exec(){
     local  cmd=$1
-    helper_ssh "module load python3/3.10.10-01; module load ecflow; export PATH=\"\$HOME/.local/bin:\$PATH\"; $cmd"
+    helper_ssh "module load python3/3.10.10-01; module load ecflow; $cmd"
 }
 
 # The runner has no python/module/$SCRATCH: run every poetry/python command
 # through this. Runs "$@" on hpc-batch in the caller's $PWD, with the
 # project .venv (once it exists) activated.
+# SYSTEM_SITE_PACKAGES=false: jobs load other modules than install time
+# (seen: ModuleNotFoundError marshmallow in a job after a green install).
 function helper_py_exec(){
     local args
     printf -v args '%q ' "$@"

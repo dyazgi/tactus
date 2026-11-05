@@ -1,5 +1,5 @@
 name: Ensure poetry on HPC
-description: Installs poetry on hpc-batch if missing (the runner has no python)
+description: Fails fast if poetry is missing on hpc-batch (installed once by hand)
 
 runs:
   using: composite
@@ -7,9 +7,8 @@ runs:
     - name: Ensure poetry on HPC
       shell: bash
       run: |
-        set -euo pipefail
         source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
-
-        helper_py_exec poetry --version ||
-          helper_py_exec bash -c 'curl -sSL https://install.python-poetry.org | python3 -'
-        helper_py_exec poetry --version
+        helper_py_exec poetry --version || {
+          echo "::error::poetry not found on hpc-batch. Install it per README.md and add ~/.local/bin to PATH in ~/.bashrc (above any interactive-only return)." >&2
+          exit 1
+        }
