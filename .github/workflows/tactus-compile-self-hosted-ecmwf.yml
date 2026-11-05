@@ -74,8 +74,6 @@ jobs:
         shell: bash
         run: |
           source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
-          # poetry looks for a `python` executable, which the python3 module lacks: pin python3.
-          helper_py_exec poetry env use python3
           helper_py_exec poetry install --no-interaction
 
       - id: compile

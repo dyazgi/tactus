@@ -1,5 +1,5 @@
 name: Point .venv at $SCRATCH
-description: Symlinks .venv into $SCRATCH (large quota) instead of this runner's small disk
+description: Creates the venv in $SCRATCH (large quota) and symlinks .venv to it
 
 runs:
   using: composite
@@ -19,8 +19,10 @@ runs:
         fi
 
         venv_target="$scratch/tactus/github-runner/$GITHUB_RUN_ID/.venv"
-        # Must exist before the symlink, or venv creation fails through it.
-        helper_exec "rm -rf '$venv_target' && mkdir -p '$venv_target'"
+        # A real venv, not an empty dir: poetry takes any existing .venv for a venv
+        # and fails on a bare `python`. venv refuses a symlink path, so create it at the target.
+        helper_exec "rm -rf '$venv_target'"
+        helper_ml_exec "python3 -m venv '$venv_target'"
 
         rm -rf .venv
         ln -s "$venv_target" .venv
