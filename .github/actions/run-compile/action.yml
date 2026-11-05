@@ -6,7 +6,7 @@ inputs:
     description: IAL git tag/branch to compile
     required: true
   dry_run:
-    description: Only generate the compile config, do not submit (maps to 'tactus compile -d')
+    description: Only generate the compile config, do not submit
     required: false
     default: "false"
 
@@ -15,10 +15,7 @@ outputs:
     description: Path to the generated compile config.toml
     value: ${{ steps.run.outputs.config_file }}
   artifact_paths:
-    description: >-
-      Newline-separated @CASEDIR@ paths (on HPC scratch) holding ci_status.txt
-      for this compile - NOT under the runner's local checkout. Feed this
-      directly into actions/upload-artifact's `path:` input.
+    description: Newline-separated @CASEDIR@ paths on HPC scratch
     value: ${{ steps.summary.outputs.artifact_paths }}
   status:
     description: PASS or FAIL
@@ -32,16 +29,8 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        # ial_tag may contain "/" (e.g. a branch name), which isn't valid in
-        # a local file name on the runner - sanitize just for the on-disk
-        # config file name. The ecFlow suite/case name is computed by `tactus
-        # compile` itself via sanitize_case_name(), no action needed here.
         safe_tag=$(echo "${{ inputs.ial_tag }}" | tr -c 'A-Za-z0-9._-' '_')
         config_file="compile_${safe_tag}.toml"
-
-        # -d/--dry-run only skips auto-starting the suite; config generation
-        # (including the three mod files tactus compile hardcodes - @HOST@,
-        # compile_suite, compile_@HOST@) always happens.
         poetry run tactus compile \
           --ial-tag "${{ inputs.ial_tag }}" \
           -d \
@@ -49,21 +38,8 @@ runs:
         echo "config_file=$config_file" >> "$GITHUB_OUTPUT"
 
     - name: Apply CI submission overrides to generated compile config
-      # Opt-in and literal-valued, same as run-testbed's equivalent step:
-      # with TACTUS_WLM_ACCOUNT unconfigured, this step is a no-op and the
-      # generated config is left exactly as `tactus compile` produced it -
-      # no CI-only account override unless one is explicitly set. `tactus
-      # compile` has no CLI-exposed config_mods (unlike `tactus case`/
-      # `tactus test -m`, see run-testbed/action.yml), so this still patches
-      # the generated config.toml directly rather than layering in a mod
-      # file - but with a literal value, not an @MACRO@ placeholder, so
-      # there's nothing left for tactus to substitute later.
-      #
-      # QOS is deliberately NOT overridden here - see run-testbed/action.yml
-      # for why: every submission type already has a correct, type-specific
-      # default QOS, and forcing the same QOS across every type previously
-      # downgraded "parallel" tasks (many-way MPI srun) to a QOS that
-      # doesn't permit that many processors, which SLURM then rejected.
+      # No TACTUS_WLM_QOS: forcing one QOS across every submission type
+      # previously broke many-way MPI tasks (wrong processor limit).
       if: env.TACTUS_WLM_ACCOUNT != ''
       shell: bash
       run: |

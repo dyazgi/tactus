@@ -1,19 +1,7 @@
 name: Cleanup tactus CI run
 description: Removes ecFlow suites and ephemeral on-disk artifacts for a tactus CI run
 
-# Persistent-vs-ephemeral policy for this action:
-#   - Kept on purpose, across runs: the compile build cache under
-#     [platform_paths.install_dir] (e.g. /perm/deployde330/github-actions/install/)
-#     and any [platform_paths.scratch] "references" tree used as the testbed
-#     reference experiment. Neither is touched here.
-#   - Always removed, regardless of outcome: the ecFlow suite(s) for this run
-#     (via 'tactus remove', which also force-suspends/removes suites that never
-#     reached 'complete' when --force-remove is given, so a cancelled or timed
-#     out run doesn't leave orphaned SLURM jobs behind) and the ephemeral
-#     per-run config directory checked out on the runner (the generated
-#     compile_*.toml / <tag>_configs/ workspace) - never the persistent
-#     install/scratch paths above, which 'tactus remove' itself knows not to
-#     touch unless explicitly configured to.
+# Leaves persistent paths (install dir, reference-experiment scratch) untouched.
 
 inputs:
   scope:

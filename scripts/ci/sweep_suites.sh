@@ -1,32 +1,10 @@
 #!/bin/bash
-# Force-remove every ecFlow suite whose name starts with a given prefix, via
-# ecflow_client directly on this runner host - no python/poetry needed.
+# Force-removes every ecFlow suite whose name starts with a given prefix
+# (via ecflow_client, no python/poetry needed). Safety net for `tactus
+# remove` leaving suites behind on crash. Only removes suite nodes, not
+# their ECF_HOME/ECF_OUT job logs.
 #
-# Safety net for CI cleanup: `tactus remove` (see cleanup-tactus-run/
-# action.yml) operates per-case-config file, and a crash/exception removing
-# one case aborts only that one invocation - but if every case in a run hits
-# the same bug, every one of them is left behind, and since each CI run's
-# cases are named from a unique [general].tag prefix (see run-testbed's
-# "Generate per-case configs" step), this repeats and accumulates run over
-# run. This sweeps by suite *name prefix* instead, and isolates failures per
-# suite so one broken suite can't block the rest - suitable both as an
-# unconditional (if: always()) CI step and for clearing an already-
-# accumulated backlog by hand.
-#
-# Host selection mirrors tactus's own SelectHost._select_host_from_list
-# (tactus/host_actions.py) for atos_bologna (tactus/data/config_files/
-# include/scheduler/ecflow_atos_bologna.toml): try each candidate host,
-# first one that answers a ping wins. Port is fixed at 3141 there too.
-# Scope note: this only removes the ecFlow suite nodes themselves (matching
-# the confirmed working pattern below), not their ECF_HOME/ECF_OUT job-log
-# directories on HPC scratch - unlike `tactus remove`, which does.
-#
-# Usage:
-#   scripts/ci/sweep_suites.sh <suite-name-prefix>
-#
-# Example, to clear an already-accumulated backlog for a branch regardless
-# of run id:
-#   scripts/ci/sweep_suites.sh feature_ecmwf_self_hosted_runner_development__
+# Usage: scripts/ci/sweep_suites.sh <suite-name-prefix>
 
 set -uo pipefail
 

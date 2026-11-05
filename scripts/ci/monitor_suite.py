@@ -1,27 +1,15 @@
 #!/usr/bin/env python3
-"""Follow a `tactus`-submitted suite's `CIMonitor` checkpoint(s) for CI.
+"""Poll a tactus-submitted suite's CIMonitor task(s) and summarize PASS/FAIL for CI.
 
-Run after `tactus compile`/`tactus test -c <config> -m -r` has submitted a suite to
-ecFlow. Polls the suite's `CIMonitor` task(s) (see `tactus.tasks.monitor.CIMonitor`)
-via `tactus.scheduler.EcflowServer` until each reaches a terminal ecFlow state (or
-the configured timeout elapses), then reads each `ci_status.txt` marker file,
-echoes it to stdout (so it shows up in the GitHub Actions log) and writes a
-markdown PASS/FAIL summary to `$GITHUB_STEP_SUMMARY` (or stdout, if that
-environment variable is unset -- e.g. when run locally outside CI).
-
-Exit code is 0 iff every monitored target reported `RESULT=PASS`, 1 otherwise
-(including on timeout -- printed/summarized as `TIMEOUT`, distinct from `FAIL`,
-for diagnosability). On timeout, or on receiving `SIGTERM` (GitHub Actions
-cancellation), any target still awaited is suspended via
-`EcflowServer.suspend()` before exiting, so orphaned SLURM jobs stop running
-unattended -- both paths funnel through the same `_suspend_targets` call.
+Run after `tactus compile`/`tactus test -c <config> -m -r`. Exit code is 0 iff
+every target reported RESULT=PASS. On timeout or SIGTERM, any pending target
+is suspended so orphaned SLURM jobs don't run unattended.
 
 Usage:
-    poetry run python scripts/ci/monitor_suite.py --mode compile
+    poetry run python scripts/ci/monitor_suite.py --mode compile \
         --config <compile_config.toml>
-    poetry run python scripts/ci/monitor_suite.py --mode testbed
+    poetry run python scripts/ci/monitor_suite.py --mode testbed \
         --config <test_runner_config.toml>
-
 """
 
 from __future__ import annotations
@@ -46,129 +34,50 @@ from tactus.toolbox import Platform
 
 logger.enable(GeneralConstants.PACKAGE_NAME)
 
-#: ecFlow states considered terminal (i.e. the `CIMonitor` checkpoint task ran).
 TERMINAL_STATES = {"complete", "aborted"}
 
 
 @dataclass
 class MonitorTarget:
-    """One `CIMonitor` task to poll, and where to read its result once it is done."""
+    """One CIMonitor task to poll, and where to read its result."""
 
-    #: Human-readable label (case name, or "compile:<precision>").
     name: str
-    #: Absolute ecFlow path of the `CIMonitor` task itself.
     ecf_path: str
-    #: Resolved path of the `ci_status.txt` file it writes.
     status_file: str
-    #: Fully-resolved config file this target's ecf_path/status_file came
-    #: from (a per-case config for testbed, the compile config for compile)
-    #: - unlike the top-level config `main()` receives via --config (for
-    #: --mode testbed, the test-runner driver file), this one actually
-    #: carries [platform]/[system], so it's safe to build an EcflowServer
-    #: from it. Defaults to "" so existing tests constructing a MonitorTarget
-    #: without caring about this field don't need updating.
+    # Fully-resolved config this target came from - unlike the top-level
+    # --config (for --mode testbed), this one carries [platform]/[system],
+    # so it's safe to build an EcflowServer from it.
     config_file: str = ""
 
     @property
     def casedir(self) -> str:
-        """The resolved `@CASEDIR@` this target's `ci_status.txt` lives under.
-
-        Also where the reference checker's own `checks/` subtree (`summary.json`,
-        `summary.txt`, per-task `.diff` files - see
-        `tactus/data/config_files/include/reference_checker.toml`) lives for a
-        testbed case, so this is the right root for a CI artifact upload: the
-        runner's local checkout only ever holds generated `*.toml` configs, never
-        these result files.
-
-        """
+        """Resolved @CASEDIR@ this target's result files live under."""
         return os.path.dirname(self.status_file)
 
 
 def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
-    """Parse command line arguments.
-
-    Args:
-        argv: Command line arguments. Defaults to `sys.argv[1:]`.
-
-    Returns:
-        argparse.Namespace: Parsed arguments.
-
-    """
+    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description=(
-            "Follow a tactus suite's CIMonitor checkpoint(s) and summarize "
-            "PASS/FAIL for GitHub Actions."
-        )
+        description="Follow a tactus suite's CIMonitor checkpoint(s) and summarize."
     )
-    parser.add_argument(
-        "--mode",
-        choices=["compile", "testbed"],
-        required=True,
-        help="Whether to follow a compile suite (one CIMonitor per precision leg) "
-        "or a testbed run (one CIMonitor per selected case).",
-    )
-    parser.add_argument(
-        "--config",
-        required=True,
-        help="For --mode compile: the resolved compile-suite config file (as "
-        "produced by `tactus compile`). For --mode testbed: the same test-runner "
-        "config file passed to `tactus test -c` (after `-m -r` have been run).",
-    )
-    parser.add_argument(
-        "--poll-interval-seconds",
-        type=int,
-        default=60,
-        help="Seconds to wait between two polls of the CIMonitor task(s).",
-    )
-    parser.add_argument(
-        "--timeout-minutes",
-        type=int,
-        default=240,
-        help="Hard deadline: give up (and suspend anything still pending) after "
-        "this many minutes.",
-    )
+    parser.add_argument("--mode", choices=["compile", "testbed"], required=True)
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--poll-interval-seconds", type=int, default=60)
+    parser.add_argument("--timeout-minutes", type=int, default=240)
     parser.add_argument(
         "--artifact-manifest",
         default=None,
-        help="If given, write each target's resolved @CASEDIR@ (one per line, "
-        "deduplicated) to this file. @CASEDIR@ is where ci_status.txt, the "
-        "reference checker's summary.json/.txt and its per-task .diff files all "
-        "actually live (on HPC scratch) - NOT under the runner's local checkout, "
-        "so a caller that wants to upload these as a CI artifact should glob "
-        "against the paths in this manifest, not guess a path.",
+        help="If given, write each target's @CASEDIR@ (deduplicated) to this file.",
     )
     return parser.parse_args(argv)
 
 
 def _resolve_casedir(config: ParsedConfig) -> str:
-    """Resolve `@CASEDIR@` (`system.casedir`) for one already-loaded case config.
-
-    Args:
-        config (ParsedConfig): A case's own configuration (as saved to disk by
-            `tactus case`/`tactus test -m`), already carrying its own
-            `general.case`.
-
-    Returns:
-        str: The resolved `system.casedir` value.
-
-    """
     return Platform(config).get_system_value("casedir")
 
 
 def discover_compile_targets(config_file: str) -> list[MonitorTarget]:
-    """Discover the `CIMonitor` task(s) for a compile suite.
-
-    One target per precision leg (`R64`, and `R32` if
-    `submission.precision == "R32"`), mirroring
-    `tactus.suites.tactus_suite_components.CompilationFamily`.
-
-    Args:
-        config_file (str): The resolved compile-suite config file.
-
-    Returns:
-        list[MonitorTarget]: One target per precision leg.
-
-    """
+    """One target per precision leg (R64, and R32 if submission.precision == R32)."""
     config = ParsedConfig.from_file(config_file, json_schema={})
     platform = Platform(config)
     case_name = platform.substitute(config.get("general.case"))
@@ -193,20 +102,7 @@ def discover_compile_targets(config_file: str) -> list[MonitorTarget]:
 
 
 def discover_testbed_targets(config_file: str) -> list[MonitorTarget]:
-    """Discover the `CIMonitor` task(s) for a testbed run: one per selected case.
-
-    Reuses `tactus.test_runner.TestCases` (the same class backing `tactus test`)
-    to enumerate the cases and their generated per-case config files, rather than
-    re-implementing that lookup.
-
-    Args:
-        config_file (str): The test-runner config file, as passed to
-            `tactus test -c`.
-
-    Returns:
-        list[MonitorTarget]: One target per case selected by that config file.
-
-    """
+    """One target per case selected by the test-runner config."""
     args = argparse.Namespace(
         config_file=config_file, verbose=False, dry=False, generate_refs=False
     )
@@ -241,20 +137,7 @@ def poll_targets(
     poll_interval_seconds: int,
     deadline: float,
 ) -> dict[str, Optional[str]]:
-    """Poll each target's `CIMonitor` ecFlow state until terminal or `deadline`.
-
-    Args:
-        server (EcflowServer): Connection to the ecFlow server the suite(s) run on.
-        targets (list[MonitorTarget]): Targets to poll.
-        poll_interval_seconds (int): Seconds to sleep between polling rounds.
-        deadline (float): `time.time()`-comparable deadline; polling stops once
-            reached, regardless of whether all targets are done.
-
-    Returns:
-        dict[str, str or None]: target.name -> final ecFlow state (as `str`), or
-            `None` if the deadline was reached first (timeout).
-
-    """
+    """Poll until every target is terminal or the deadline passes."""
     states: dict[str, Optional[str]] = dict.fromkeys(target.name for target in targets)
     pending = list(targets)
 
@@ -290,17 +173,7 @@ def poll_targets(
 def read_results(
     targets: list[MonitorTarget], states: dict[str, Optional[str]]
 ) -> dict[str, dict]:
-    """Read and echo each target's `ci_status.txt`, classifying PASS/FAIL/TIMEOUT.
-
-    Args:
-        targets (list[MonitorTarget]): Targets that were polled.
-        states (dict[str, str or None]): Result of `poll_targets`.
-
-    Returns:
-        dict[str, dict]: target.name -> {"status": "PASS"|"FAIL"|"TIMEOUT",
-            "detail": str}.
-
-    """
+    """Read and echo each target's ci_status.txt, classifying PASS/FAIL/TIMEOUT."""
     results = {}
     for target in targets:
         state = states.get(target.name)
@@ -330,12 +203,7 @@ def read_results(
 
 
 def write_step_summary(results: dict[str, dict]) -> None:
-    """Write a markdown PASS/FAIL summary to `$GITHUB_STEP_SUMMARY`, or stdout.
-
-    Args:
-        results (dict[str, dict]): Result of `read_results`.
-
-    """
+    """Write a markdown PASS/FAIL table to $GITHUB_STEP_SUMMARY, or stdout."""
     lines = ["## tactus CI monitor summary", "", "| Target | Result |", "| --- | --- |"]
     for name, result in results.items():
         lines.append(f"| {name} | {result['status']} |")
@@ -352,13 +220,7 @@ def write_step_summary(results: dict[str, dict]) -> None:
 
 
 def write_artifact_manifest(targets: list[MonitorTarget], manifest_path: str) -> None:
-    """Write each target's `casedir` (deduplicated, order-preserving) to a file.
-
-    Args:
-        targets (list[MonitorTarget]): Targets whose `casedir` to record.
-        manifest_path (str): File to write, one `casedir` per line.
-
-    """
+    """Write each target's casedir (deduplicated) to a file, one per line."""
     casedirs = list(dict.fromkeys(target.casedir for target in targets))
     with open(manifest_path, "w", encoding="utf-8") as f:
         f.write("\n".join(casedirs) + ("\n" if casedirs else ""))
@@ -368,13 +230,6 @@ def write_artifact_manifest(targets: list[MonitorTarget], manifest_path: str) ->
 
 
 def _suspend_one(server: EcflowServer, target: MonitorTarget) -> None:
-    """Suspend a single target's ecFlow node (best-effort, logs but never raises).
-
-    Args:
-        server (EcflowServer): Connection to the ecFlow server.
-        target (MonitorTarget): Target to suspend.
-
-    """
     try:
         server.suspend(target.ecf_path)
     except RuntimeError:
@@ -382,30 +237,12 @@ def _suspend_one(server: EcflowServer, target: MonitorTarget) -> None:
 
 
 def _suspend_targets(server: EcflowServer, targets: list[MonitorTarget]) -> None:
-    """Suspend every target's ecFlow node.
-
-    Shared by the timeout path and the `SIGTERM` handler, so orphaned SLURM jobs
-    stop rather than run unattended, regardless of *why* we stopped waiting.
-
-    Args:
-        server (EcflowServer): Connection to the ecFlow server.
-        targets (list[MonitorTarget]): Targets to suspend.
-
-    """
     for target in targets:
         _suspend_one(server, target)
 
 
 def main(argv: Optional[list] = None) -> int:
-    """Program's main routine.
-
-    Args:
-        argv: Command line arguments. Defaults to `sys.argv[1:]`.
-
-    Returns:
-        int: Process exit code (0 iff every target reported `RESULT=PASS`).
-
-    """
+    """Entry point."""
     args = parse_args(argv)
 
     if args.mode == "compile":
@@ -417,19 +254,13 @@ def main(argv: Optional[list] = None) -> int:
         logger.warning("No targets to monitor for {}", args.config)
         return 0
 
-    # EcflowServer just needs scheduler.ecfvars.* (host/port), but building
-    # it requires a fully-resolved config carrying [platform]/[system] -
-    # args.config itself doesn't have those for --mode testbed (it's the
-    # top-level test-runner config, e.g. atos_bologna_CY50t2.toml, which only
-    # ever has [general]/[include]; each case's own generated config carries
-    # the rest). Reuse any one target's own already-resolved config instead -
-    # they all point at the same ecFlow server regardless of which one.
+    # EcflowServer needs [platform]/[system] - args.config (for --mode
+    # testbed) doesn't have those, so reuse a target's own resolved config.
     server_config = ParsedConfig.from_file(targets[0].config_file, json_schema={})
     server = EcflowServer(server_config)
     pending_targets = list(targets)
 
     def _handle_sigterm(signum, _frame):
-        """Suspend anything still pending, then exit non-zero (GHA cancellation)."""
         logger.warning(
             "Received signal {}; suspending in-flight targets and exiting", signum
         )

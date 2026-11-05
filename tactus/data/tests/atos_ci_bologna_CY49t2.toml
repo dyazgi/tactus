@@ -1,11 +1,6 @@
 [general]
   reference_date = "2026-06-18T00:00:00Z"
-  # Small, fast CI smoke-test subset of atos_bologna_CY49t2.toml's full
-  # selection - one model family's forecast case plus its required
-  # "host" prerequisite (see case_definitions_CY49t2.toml: cy49t2_alaro/
-  # cy49t2_arome both set host = "..._climate_files", so that prerequisite
-  # must stay selected alongside it). Skips the ddh/eps/slaf/mode_start/
-  # R64/target variants and harmonie_arome entirely to keep runtime down.
+  # Small CI smoke-test subset of atos_bologna_CY49t2.toml's full selection.
   selection = [
     #"cy49t2_alaro_climate_files",
     #"cy49t2_alaro",

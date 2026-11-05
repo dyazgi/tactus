@@ -1,12 +1,7 @@
 #.github/workflows/tactus-testbed-self-hosted-ecmwf.yml
 name: Tactus Testbed (self-hosted ECMWF)
 
-# Triggered the same way as the reference HARMONIE self-hosted CI: any push
-# (gated below to only actually run when the commit message contains
-# "--action-testbed"; the pull_request.title/body checks are carried over
-# from that reference for parity but are inert under a push-only trigger),
-# or an explicit manual dispatch.
-
+# Runs on push with "--action-testbed" in the commit message, or manual dispatch.
 on:
   push:
   workflow_dispatch:
@@ -20,49 +15,26 @@ on:
         required: false
         default: ""
       ial_tag:
-        description: >-
-          IAL ref to compile first and test against (branch/tag/commit).
-          Mutually exclusive with ial_git_version. Leave both blank to test
-          against each case's existing precompiled binaries, no compile.
+        description: IAL ref to compile first and test against. Mutually exclusive with ial_git_version.
         type: string
         default: ""
       ial_git_version:
-        description: >-
-          IAL ref to compile first and test against (branch/tag/commit).
-          Mutually exclusive with ial_tag. Leave both blank to test against
-          each case's existing precompiled binaries, no compile.
+        description: IAL ref to compile first and test against. Mutually exclusive with ial_tag.
         type: string
         default: ""
 
 env:
   GITHUB_TOKEN: ${{ secrets.GH_REPO_READ_TOKEN }}
-  # Empty (not a hardcoded default) unless the repo/org variable is set -
-  # see run-testbed/action.yml and run-compile/action.yml: with it unset,
-  # CI submits with no account override at all, identical to a plain manual
-  # `tactus test -c ... -m -r`/`tactus compile` run. No equivalent QOS
-  # variable on purpose - see those files for why forcing one QOS across
-  # every submission type is actively wrong, not just unnecessary.
+  # Empty unless set: no account override, identical to a manual `tactus test`/`compile` run.
   TACTUS_WLM_ACCOUNT: ${{ vars.TACTUS_WLM_ACCOUNT }}
   TACTUS_POLL_INTERVAL_SECONDS: ${{ vars.TACTUS_POLL_INTERVAL_SECONDS }}
   TACTUS_SUITE_TIMEOUT_MINUTES: ${{ vars.TACTUS_SUITE_TIMEOUT_MINUTES }}
-  # poetry.toml sets virtualenvs.options.system-site-packages = true (likely
-  # for interactive HPC use, relying on module-provided library bindings).
-  # That lets `poetry install` skip installing a package into .venv if it's
-  # already visible via whatever module/system python is active at install
-  # time - but the SLURM job that later runs tasks loads its own module set
-  # (e.g. a different ecmwf-toolbox version), which can make that package
-  # invisible again at run time (seen in practice: a
-  # ModuleNotFoundError: No module named 'marshmallow', a sub-dependency of
-  # json-schema-for-humans, inside a submitted job that ran fine through
-  # `poetry install`). Override it for CI only, without touching
-  # poetry.toml, so .venv is always fully self-contained here regardless of
-  # which module happens to be loaded when a task actually runs.
+  # Force a self-contained .venv - poetry.toml's system-site-packages can
+  # otherwise skip installing a package that's only visible under whatever
+  # module happens to be loaded at `poetry install` time.
   POETRY_VIRTUALENVS_OPTIONS_SYSTEM_SITE_PACKAGES: "false"
 
-# Real integration cases share Atos scratch space and the reference-experiment
-# tree, so - unlike compile - all testbed runs are deliberately serialized
-# into a single global group (matches the reference repo's
-# harmonie-testbed-ci group for the same reason).
+# Testbed cases share scratch/reference-experiment state, so serialize all runs.
 concurrency:
   group: tactus-testbed-ci
   cancel-in-progress: false
@@ -81,12 +53,6 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Free local disk (poetry venv + cache)
-        # Don't rely solely on actions/checkout's default `git clean -ffdx`
-        # to start from a clean state - that only ever covers files inside
-        # the checkout (.venv included, since poetry.toml puts it
-        # in-project); poetry's download/package cache lives under $HOME,
-        # entirely outside the checkout, so it's never touched by checkout
-        # and would otherwise grow unbounded forever without this.
         uses: ./.github/actions/free-local-disk
         with:
           extra_patterns: ci_run_*.toml
@@ -139,9 +105,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Cleanup compile sub-step
-        # Opt-in so suites/configs survive for debugging during development -
-        # set the repo/org variable TACTUS_ECF_SUITES_AUTO_CLEANUP to 'true' to
-        # auto-remove them; unset (or anything else) leaves them in place.
+        # Opt-in: set repo/org var TACTUS_ECF_SUITES_AUTO_CLEANUP=true to auto-remove.
         if: always() && steps.resolve.outputs.should_compile == 'true' && vars.TACTUS_ECF_SUITES_AUTO_CLEANUP == 'true'
         uses: ./.github/actions/cleanup-tactus-run
         with:
@@ -157,10 +121,6 @@ jobs:
           ial_version: ${{ steps.resolve.outputs.ial_ref }}
 
       - name: Upload testbed logs and check summaries
-        # ci_status.txt/summary.json/summary.txt/*.diff live under each case's
-        # @CASEDIR@ on HPC scratch, NOT under test_dir (which only ever holds
-        # the generated *.toml configs on the runner's own checkout) - glob
-        # against run-testbed's artifact_paths output instead of test_dir.
         if: always() && steps.testbed.outputs.artifact_paths != ''
         uses: actions/upload-artifact@v4
         with:
@@ -170,9 +130,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Cleanup
-        # Opt-in so suites/configs survive for debugging during development -
-        # set the repo/org variable TACTUS_ECF_SUITES_AUTO_CLEANUP to 'true' to
-        # auto-remove them; unset (or anything else) leaves them in place.
+        # Opt-in: set repo/org var TACTUS_ECF_SUITES_AUTO_CLEANUP=true to auto-remove.
         if: always() && vars.TACTUS_ECF_SUITES_AUTO_CLEANUP == 'true'
         uses: ./.github/actions/cleanup-tactus-run
         with:
@@ -180,11 +138,6 @@ jobs:
           test_dir: ${{ steps.testbed.outputs.test_dir }}
 
       - name: Sweep any leftover suites for this run
-        # Safety net on top of the per-case `tactus remove` above: catches
-        # every suite still left for this run's unique tag, even if removing
-        # one case crashed and left others behind too (see
-        # scripts/ci/sweep_suites.sh for why). Same opt-in as the Cleanup
-        # step above.
         if: always() && steps.testbed.outputs.run_tag != '' && vars.TACTUS_ECF_SUITES_AUTO_CLEANUP == 'true'
         continue-on-error: true
         shell: bash

@@ -1,18 +1,9 @@
 name: Free local disk (poetry venv + cache)
-description: >-
-  Removes this run's poetry-managed .venv (and, if setup-venv-scratch
-  pointed it at $SCRATCH, the real target that symlink points to - not just
-  the symlink itself), its download/package cache, and any CI-generated
-  config files - this runner's local disk is small, so don't rely on the
-  next job's checkout clean to reclaim it. Shared by the compile and
-  testbed self-hosted workflows - was duplicated between them before
-  (testbed only differed by one extra glob to remove).
+description: Removes .venv (and its $SCRATCH target, if any), poetry cache, CI config files
 
 inputs:
   extra_patterns:
-    description: >-
-      Additional space-separated glob patterns (relative to cwd) to remove
-      alongside the common ones (.venv, ci_artifact_casedirs.txt).
+    description: Extra space-separated glob patterns to remove
     required: false
     default: ""
 
@@ -24,10 +15,7 @@ runs:
       run: |
         set +e
         # .venv may be a symlink into $SCRATCH (see setup-venv-scratch) -
-        # resolve and remove the real target too, or $SCRATCH leaks space
-        # silently across every run. readlink -f, not the env var that
-        # action writes, so this works standalone regardless of whether
-        # setup-venv-scratch ran this run (e.g. $SCRATCH was unresolvable).
+        # free the real target too.
         if [ -L .venv ]; then
           real_venv=$(readlink -f .venv)
           [ -n "$real_venv" ] && rm -rf "$real_venv"

@@ -6,14 +6,11 @@ inputs:
     description: Path to the test-suite config (relative to repo root)
     required: true
   case_selection:
-    description: Comma-separated case names to restrict to (empty = every case in test_config)
+    description: Comma-separated case names to restrict to (empty = every case)
     required: false
     default: ""
   ial_version:
-    description: >-
-      submission.ial_version to force on every generated case config (e.g. the
-      ref a preceding compile sub-step just built). Empty = leave each case's
-      own default (precompiled binaries) untouched.
+    description: submission.ial_version to force on every case (empty = leave default)
     required: false
     default: ""
 
@@ -22,21 +19,13 @@ outputs:
     description: Directory containing the generated per-case config.toml files
     value: ${{ steps.configure.outputs.test_dir }}
   run_tag:
-    description: >-
-      Unique [general].tag injected into every case this run (branch_runid_
-      runattempt) - every case's ecFlow suite name starts with this. Feed it
-      to scripts/ci/sweep_suites.sh to force-remove every suite from this
-      run, regardless of whether per-case `tactus remove` succeeded.
+    description: Unique [general].tag injected into every case this run
     value: ${{ steps.configure.outputs.run_tag }}
   resolved_config:
     description: The top-level test-runner config file this run generated
     value: ${{ steps.configure.outputs.resolved_config }}
   artifact_paths:
-    description: >-
-      Newline-separated @CASEDIR@ paths (one per case, on HPC scratch) holding
-      ci_status.txt/summary.json/summary.txt/*.diff - NOT under test_dir, which
-      only ever holds the generated *.toml configs. Feed this directly into
-      actions/upload-artifact's `path:` input.
+    description: Newline-separated @CASEDIR@ paths on HPC scratch
     value: ${{ steps.follow.outputs.artifact_paths }}
   status:
     description: PASS or FAIL
@@ -50,47 +39,14 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        # Always generate a config copy (not just when case_selection is set)
-        # so we can also inject a unique [general].tag below - this threads
-        # through TestCases.get_tag() (only falls back to the git-derived
-        # branch name if [general].tag isn't already present) into every
-        # case's case_prefix/general.case/casedir/ecFlow-suite name BEFORE
-        # tactus test's own host=-dependency resolution runs, so dependent
-        # cases stay consistent (see the "Fix 7" note in the plan for why a
-        # post-hoc rename would break host= dependencies instead).
-        #
-        # Any CI-only submission overrides (account/ial_version) are applied
-        # via [general].extra - the same native config-mods mechanism
-        # `tactus case` uses, that TestCases.create() (tactus/test_runner.py)
-        # already splices into every case's own `tactus case <base>
-        # <extra...> <outfile>` invocation. That runs per-case at generation
-        # time, through ExpFromFiles' own deep-merge + schema validation,
-        # BEFORE host=-dependency resolution.
-        #
-        # QOS is deliberately NOT overridden here at all (no TACTUS_WLM_QOS
-        # variable exists): unlike account, every submission type already
-        # has a correct, type-specific default
-        # QOS (tactus/data/config_files/include/submission/atos_bologna.toml
-        # - e.g. "parallel" gets "np", "gnu"/"serial" get "nf"). A past
-        # version of this override forced the SAME QOS across every type,
-        # which silently downgraded "parallel" tasks (e.g. Prep, a 32-way
-        # MPI srun) from "np" to "nf" - a QOS that doesn't permit that many
-        # processors, and SLURM rejected the job with "More processors
-        # requested than permitted". A manual `tactus test -m -r` run (no
-        # override at all) doesn't hit this, since it keeps each type's own
-        # correct QOS.
-        #
-        # TACTUS_WLM_ACCOUNT is resolved to a literal value right here, in
-        # plain bash, rather than written as an @MACRO@ placeholder for
-        # tactus to substitute later via os_macros - two reasons: (1) it
-        # means a CI run with it unset generates literally no extra mod file
-        # at all, so submission is byte-for-byte identical to a plain manual
-        # `tactus test -c ... -m -r` - no account override unless one is
-        # explicitly configured; (2) it sidesteps a real bug (now also fixed
-        # at the source in tactus/submission.py) where the "account" BATCH
-        # fallback never went through Platform.substitute(), so a macro
-        # there was silently left unexpanded in the generated job script and
-        # rejected by sbatch.
+        # [general].tag must be set before `tactus test -m` resolves
+        # host=-dependencies, so suite/casedir names stay consistent.
+        # CI overrides (account/ial_version) go via [general].extra, the
+        # same config-mods mechanism `tactus case` uses natively. No QOS
+        # override: every submission type already has a correct default,
+        # and forcing one broke many-way MPI tasks before. Account is a
+        # literal value, not an @MACRO@, so an unset TACTUS_WLM_ACCOUNT
+        # generates no override file at all.
         config_file="ci_run_$(basename "${{ inputs.test_config }}")"
         safe_branch=$(echo "${{ github.ref_name }}" | tr -c 'A-Za-z0-9._-' '_')
         run_tag="${safe_branch}_${{ github.run_id }}_${{ github.run_attempt }}"
@@ -124,10 +80,6 @@ runs:
             f.write(tomlkit.dumps(doc))
         PYEOF
         poetry run tactus test -c "$config_file" -m
-        # TestCases.test_dir is derived from [general.tag] (falling back to the
-        # git-derived version), not the config file name - ask TestCases itself
-        # rather than guessing, so this stays correct regardless of how the
-        # config sets (or doesn't set) [general.tag].
         test_dir=$(poetry run python -c "
         import argparse
         from tactus.test_runner import TestCases
