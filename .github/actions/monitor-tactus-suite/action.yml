@@ -14,7 +14,7 @@ inputs:
 
 outputs:
   artifact_paths:
-    description: Newline-separated @CASEDIR@ paths on HPC scratch
+    description: Workspace glob of the staged status files and failed-task outputs
     value: ${{ steps.monitor.outputs.artifact_paths }}
   status:
     description: PASS or FAIL
@@ -28,21 +28,33 @@ runs:
       shell: bash
       run: |
         set -o pipefail
+        source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
+        rm -f ci_artifact_casedirs.txt ci_failed_outputs.txt ci_step_summary.md
+        # Read by the cancel action.
+        printf '%s\n' "${{ inputs.mode }}" "${{ inputs.config_file }}" > ci_monitor_target.txt
         set +e
-        poetry run python scripts/ci/monitor_suite.py \
+        # Runs on hpc-batch (env vars don't cross ssh): summary goes to a workspace file.
+        helper_py_exec env GITHUB_STEP_SUMMARY="$GITHUB_WORKSPACE/ci_step_summary.md" \
+          python3 scripts/ci/monitor_suite.py \
           --mode "${{ inputs.mode }}" \
           --config "${{ inputs.config_file }}" \
           --poll-interval-seconds "${{ env.TACTUS_POLL_INTERVAL_SECONDS || '60' }}" \
           --timeout-minutes "${{ env.TACTUS_SUITE_TIMEOUT_MINUTES || inputs.default_timeout_minutes }}" \
-          --artifact-manifest ci_artifact_casedirs.txt
+          --artifact-manifest ci_artifact_casedirs.txt \
+          --failed-outputs-manifest ci_failed_outputs.txt
         rc=$?
         set -e
 
-        # Manifest may be missing if monitor_suite.py crashed - don't let
-        # that also break the GITHUB_OUTPUT write below.
+        if [ -f ci_step_summary.md ]; then
+          cat ci_step_summary.md >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        # Manifest may be missing if monitor_suite.py crashed.
         artifact_paths=""
         if [ -f ci_artifact_casedirs.txt ]; then
-          artifact_paths=$(sed 's#$#/**#' ci_artifact_casedirs.txt)
+          # Casedirs and job output are on HPC-only disks: stage the small files into the workspace.
+          helper_exec "cd '$PWD' && bash .github/sh/stage_artifacts.sh ci_artifact_casedirs.txt ci_failed_outputs.txt ci_artifacts" || true
+          artifact_paths="ci_artifacts/**"
         fi
         {
           echo "artifact_paths<<EOF_ARTIFACT_PATHS"

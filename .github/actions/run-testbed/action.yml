@@ -25,7 +25,7 @@ outputs:
     description: The top-level test-runner config file this run generated
     value: ${{ steps.configure.outputs.resolved_config }}
   artifact_paths:
-    description: Newline-separated @CASEDIR@ paths on HPC scratch
+    description: Workspace glob of the staged status files and failed-task outputs
     value: ${{ steps.follow.outputs.artifact_paths }}
   status:
     description: PASS or FAIL
@@ -39,6 +39,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
         # [general].tag must be set before `tactus test -m` resolves
         # host=-dependencies, so suite/casedir names stay consistent.
         # CI overrides (account/ial_version) go via [general].extra, the
@@ -50,7 +51,7 @@ runs:
         config_file="ci_run_$(basename "${{ inputs.test_config }}")"
         safe_branch=$(echo "${{ github.ref_name }}" | tr -c 'A-Za-z0-9._-' '_')
         run_tag="${safe_branch}_${{ github.run_id }}_${{ github.run_attempt }}"
-        poetry run python - "${{ inputs.test_config }}" "$config_file" "${{ inputs.case_selection }}" "$run_tag" \
+        helper_py_exec python3 - "${{ inputs.test_config }}" "$config_file" "${{ inputs.case_selection }}" "$run_tag" \
           ci_submission_override.toml \
           "${TACTUS_WLM_ACCOUNT:-}" "${{ inputs.ial_version }}" <<'PYEOF'
         import sys
@@ -79,8 +80,8 @@ runs:
         with open(dest, "w") as f:
             f.write(tomlkit.dumps(doc))
         PYEOF
-        poetry run tactus test -c "$config_file" -m
-        test_dir=$(poetry run python -c "
+        helper_py_exec poetry run tactus test -c "$config_file" -m
+        test_dir=$(helper_py_exec python3 -c "
         import argparse
         from tactus.test_runner import TestCases
         args = argparse.Namespace(config_file='$config_file', verbose=False, dry=False, generate_refs=False)
@@ -92,7 +93,9 @@ runs:
 
     - name: Start suites
       shell: bash
-      run: poetry run tactus test -c "${{ steps.configure.outputs.resolved_config }}" -r
+      run: |
+        source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
+        helper_py_exec poetry run tactus test -c "${{ steps.configure.outputs.resolved_config }}" -r
 
     - id: follow
       name: Follow suites and summarize
@@ -105,4 +108,6 @@ runs:
     - name: Print final case table (informational only)
       if: always()
       shell: bash
-      run: poetry run tactus test -c "${{ steps.configure.outputs.resolved_config }}" || true
+      run: |
+        source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
+        helper_py_exec poetry run tactus test -c "${{ steps.configure.outputs.resolved_config }}" || true

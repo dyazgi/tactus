@@ -15,7 +15,7 @@ outputs:
     description: Path to the generated compile config.toml
     value: ${{ steps.run.outputs.config_file }}
   artifact_paths:
-    description: Newline-separated @CASEDIR@ paths on HPC scratch
+    description: Workspace glob of the staged status files and failed-task outputs
     value: ${{ steps.summary.outputs.artifact_paths }}
   status:
     description: PASS or FAIL
@@ -29,9 +29,10 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
         safe_tag=$(echo "${{ inputs.ial_tag }}" | tr -c 'A-Za-z0-9._-' '_')
         config_file="compile_${safe_tag}.toml"
-        poetry run tactus compile \
+        helper_py_exec poetry run tactus compile \
           --ial-tag "${{ inputs.ial_tag }}" \
           -d \
           -o "$config_file"
@@ -43,7 +44,8 @@ runs:
       if: env.TACTUS_WLM_ACCOUNT != ''
       shell: bash
       run: |
-        poetry run python - "${{ steps.run.outputs.config_file }}" \
+        source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
+        helper_py_exec python3 - "${{ steps.run.outputs.config_file }}" \
           "${TACTUS_WLM_ACCOUNT:-}" <<'PYEOF'
         import sys
         import tomlkit
@@ -60,7 +62,9 @@ runs:
     - name: Start compile suite
       if: ${{ inputs.dry_run != 'true' }}
       shell: bash
-      run: poetry run tactus start suite -c "${{ steps.run.outputs.config_file }}"
+      run: |
+        source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
+        helper_py_exec poetry run tactus start suite -c "${{ steps.run.outputs.config_file }}"
 
     - id: summary
       name: Follow suite and summarize

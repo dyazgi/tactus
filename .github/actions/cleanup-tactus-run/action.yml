@@ -24,10 +24,11 @@ runs:
       shell: bash
       run: |
         set -uo pipefail
+        source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
 
         if [ "${{ inputs.scope }}" = "compile" ] && [ -n "${{ inputs.config_file }}" ]; then
           if [ -f "${{ inputs.config_file }}" ]; then
-            poetry run tactus remove --execute-removal --force-remove "${{ inputs.config_file }}"
+            helper_py_exec poetry run tactus remove --execute-removal --force-remove "${{ inputs.config_file }}"
           fi
           rm -f "${{ inputs.config_file }}"
         fi
@@ -36,7 +37,7 @@ runs:
           if [ -d "${{ inputs.test_dir }}" ]; then
             for cfg in "${{ inputs.test_dir }}"/*.toml; do
               [ -f "$cfg" ] || continue
-              poetry run tactus remove --execute-removal --force-remove "$cfg"
+              helper_py_exec poetry run tactus remove --execute-removal --force-remove "$cfg"
             done
           fi
           rm -rf "${{ inputs.test_dir }}"

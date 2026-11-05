@@ -5,31 +5,44 @@ function log_msq(){
     echo "--MESSAGE--: " $@
 }
 
+# Keepalive: the monitor holds one ssh session open for hours.
+function helper_ssh(){
+    ssh -o ServerAliveInterval=60 -o ServerAliveCountMax=10 hpc-batch "$@"
+}
+
 function helper_mkfile(){
     local  output=$1
-    ssh hpc-batch "mkdir -p $(dirname $output); touch $output"
+    helper_ssh "mkdir -p $(dirname $output); touch $output"
 }
 
 function helper_mkdir(){
     local  dir=$1
-    ssh hpc-batch "mkdir -p $dir"
+    helper_ssh "mkdir -p $dir"
 }
 
 function helper_exec(){
     local  cmd=$1
-    ssh hpc-batch "$cmd"
+    helper_ssh "$cmd"
 }
 
-# Like helper_exec, but loads python3/ecflow first (same modules every
-# HPC-submitted job loads) - use for poetry/tactus commands.
+# helper_exec with python3/ecflow modules loaded and ~/.local/bin (poetry) on PATH.
 function helper_ml_exec(){
     local  cmd=$1
-    ssh hpc-batch "module load python3/3.10.10-01; module load ecflow; $cmd"
+    helper_ssh "module load python3/3.10.10-01; module load ecflow; export PATH=\"\$HOME/.local/bin:\$PATH\"; $cmd"
+}
+
+# The runner has no python/module/$SCRATCH: run every poetry/python command
+# through this. Runs "$@" on hpc-batch in the caller's $PWD, with the
+# project .venv (once it exists) activated.
+function helper_py_exec(){
+    local args
+    printf -v args '%q ' "$@"
+    helper_ml_exec "cd '$PWD' && export POETRY_VIRTUALENVS_OPTIONS_SYSTEM_SITE_PACKAGES=false && { [ ! -f .venv/bin/activate ] || source .venv/bin/activate; } && $args"
 }
 
 function helper_getVar(){
     local  varname=$1
-    ssh hpc-batch "echo \$$varname"
+    helper_ssh "echo \$$varname"
 }
 
 # Prints ial_tag+ial_git_version (at most one may be set); errors if both are.

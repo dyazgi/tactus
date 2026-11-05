@@ -25,10 +25,6 @@ env:
   TACTUS_WLM_ACCOUNT: ${{ vars.TACTUS_WLM_ACCOUNT }}
   TACTUS_POLL_INTERVAL_SECONDS: ${{ vars.TACTUS_POLL_INTERVAL_SECONDS }}
   TACTUS_SUITE_TIMEOUT_MINUTES: ${{ vars.TACTUS_SUITE_TIMEOUT_MINUTES }}
-  # Force a self-contained .venv - poetry.toml's system-site-packages can
-  # otherwise skip installing a package that's only visible under whatever
-  # module happens to be loaded at `poetry install` time.
-  POETRY_VIRTUALENVS_OPTIONS_SYSTEM_SITE_PACKAGES: "false"
 
 # One compile per branch at a time.
 concurrency:
@@ -68,19 +64,17 @@ jobs:
           fi
           echo "ial_ref=$ial_ref" >> "$GITHUB_OUTPUT"
 
-      - id: ensure_poetry
-        name: Ensure poetry is available
+      - name: Ensure poetry on HPC
         uses: ./.github/actions/ensure-poetry
 
       - name: Point .venv at $SCRATCH
         uses: ./.github/actions/setup-venv-scratch
 
-      - name: Install the project itself
-        # poetry's auto-detected interpreter is literally named "python",
-        # which the python3/3.10.10-01 module doesn't provide - pin python3.
+      - name: Install the project (on HPC)
+        shell: bash
         run: |
-          poetry env use python3
-          poetry install --no-interaction --only main,test
+          source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
+          helper_py_exec poetry install --no-interaction --only main,test
 
       - id: compile
         name: Compile via tactus
@@ -88,6 +82,10 @@ jobs:
         with:
           ial_tag: ${{ steps.resolve.outputs.ial_ref }}
           dry_run: ${{ github.event.inputs.dry_run || 'false' }}
+
+      - name: Cancel suites
+        if: cancelled()
+        uses: ./.github/actions/cancel-tactus-run
 
       - name: Upload compile logs
         if: always() && github.event.inputs.dry_run != 'true' && steps.compile.outputs.artifact_paths != ''

@@ -1,5 +1,5 @@
 name: Setup GitHub Credentials
-description: Sets up git config to use token for GitHub URLs
+description: Sets up git config (on hpc-batch, where poetry runs) to use token for GitHub URLs
 
 inputs:
   github_token:
@@ -10,7 +10,11 @@ runs:
   using: composite
   steps:
     - name: Set github credentials
+      env:
+        TOKEN: ${{ inputs.github_token }}
       run: |
         sed -i 's#ssh://git@github.com:#https://github.com/#g' pyproject.toml
-        git config --global url."https://${{ inputs.github_token }}@github.com/".insteadOf "https://github.com/"
+        source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
+        # Token via stdin, not argv.
+        printf '%s' "$TOKEN" | helper_exec 'git config --global url."https://$(cat)@github.com/".insteadOf "https://github.com/"'
       shell: bash

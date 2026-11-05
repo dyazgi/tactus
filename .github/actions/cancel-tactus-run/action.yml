@@ -1,0 +1,22 @@
+name: Cancel tactus run
+description: Suspends the monitored ecFlow suites and kills their running jobs (use with if cancelled())
+
+runs:
+  using: composite
+  steps:
+    - name: Suspend and kill suites
+      shell: bash
+      run: |
+        set -uo pipefail
+        [ -f ci_monitor_target.txt ] || exit 0
+        source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
+        { read -r mode; read -r config; } < ci_monitor_target.txt
+        # Suite names come from the same config the monitor uses; ecflow_client runs on this runner.
+        mapfile -t suites < <(
+          helper_py_exec python3 scripts/ci/monitor_suite.py --mode "$mode" --config "$config" --print-suites |
+            grep -E '^[A-Za-z0-9._-]+$'
+        )
+        if [ "${#suites[@]}" -gt 0 ]; then
+          bash scripts/ci/sweep_suites.sh --cancel "${suites[@]}"
+        fi
+        exit 0

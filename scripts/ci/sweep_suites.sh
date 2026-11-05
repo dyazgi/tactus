@@ -5,10 +5,17 @@
 # their ECF_HOME/ECF_OUT job logs.
 #
 # Usage: scripts/ci/sweep_suites.sh <suite-name-prefix>
+#        scripts/ci/sweep_suites.sh --cancel <suite-name>...
+#   --cancel: suspend the named suites and kill their running jobs (no delete).
 
 set -uo pipefail
 
-prefix="${1:?Usage: $0 <suite-name-prefix>}"
+cancel=0
+if [ "${1:-}" = "--cancel" ]; then
+  cancel=1
+  shift
+fi
+prefix="${1:?Usage: $0 [--cancel] <suite-name-prefix | suite-name...>}"
 
 if ! command -v ecflow_client >/dev/null 2>&1; then
   echo "::error::ecflow_client not found on PATH on this runner host" >&2
@@ -37,6 +44,18 @@ else
 fi
 
 echo "Using ECF_HOST=$ecf_host ECF_PORT=$ecf_port"
+
+if [ "$cancel" -eq 1 ]; then
+  failures=0
+  for suite in "$@"; do
+    echo "Suspending and killing /$suite"
+    ecflow_client --host="$ecf_host" --port="$ecf_port" --suspend "/$suite" || failures=$((failures + 1))
+    ecflow_client --host="$ecf_host" --port="$ecf_port" --kill "/$suite" || failures=$((failures + 1))
+  done
+  echo "Cancelled $# suite(s) ($failures failure(s))"
+  [ "$failures" -eq 0 ]
+  exit $?
+fi
 
 mapfile -t suite_names < <(
   ecflow_client --host="$ecf_host" --port="$ecf_port" --get_state 2>/dev/null \

@@ -1,5 +1,5 @@
 name: Free local disk (poetry venv + cache)
-description: Removes .venv (and its $SCRATCH target, if any), poetry cache, CI config files
+description: Removes .venv (and its $SCRATCH target), poetry cache, CI files, GitHub token from hpc-batch git config
 
 inputs:
   extra_patterns:
@@ -14,19 +14,18 @@ runs:
       shell: bash
       run: |
         set +e
-        # .venv may be a symlink into $SCRATCH (see setup-venv-scratch),
-        # only mounted on the HPC side - free the real target over ssh.
-        # Plain readlink (not -f): just reads the link text, no local
-        # access to the target needed.
+        source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
+        # .venv may be a symlink into $SCRATCH - free the real target over ssh.
         if [ -L .venv ]; then
           real_venv=$(readlink .venv)
           if [ -n "$real_venv" ]; then
-            source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
             helper_exec "rm -rf '$real_venv'"
           fi
         fi
-        rm -rf .venv
-        rm -f ci_artifact_casedirs.txt ${{ inputs.extra_patterns }}
-        cache_dir=$(poetry config cache-dir 2>/dev/null)
-        [ -n "$cache_dir" ] && rm -rf "$cache_dir"
+        rm -rf .venv ci_artifacts
+        rm -f ci_artifact_casedirs.txt ci_failed_outputs.txt ci_step_summary.md ci_monitor_target.txt ${{ inputs.extra_patterns }}
+        # Poetry cache and git token live on hpc-batch.
+        cache_dir=$(helper_py_exec poetry config cache-dir 2>/dev/null)
+        [ -n "$cache_dir" ] && helper_exec "rm -rf '$cache_dir'"
+        helper_exec "git config --global --get-regexp '^url\..*@github\.com/\.insteadof\$' | cut -d' ' -f1 | sed 's/\.insteadof\$//' | while read -r s; do git config --global --remove-section \"\$s\"; done"
         exit 0
