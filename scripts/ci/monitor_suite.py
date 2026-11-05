@@ -5,8 +5,10 @@ Run after `tactus compile`/`tactus test -c <config> -m -r`. Exit code is 0 iff
 every target reported RESULT=PASS. Never waits forever on a dead target:
  - a suite with an aborted task (CIMonitor still queued after ABORT_POLLS polls)
    is suspended, its running jobs are killed and it is reported FAIL;
- - a target whose host suite failed (its Mirror node can never complete) is
-   reported BLOCKED;
+   a failed ReferenceCheck is the exception: CIMonitor reports it and the
+   dependants still run and are waited for;
+ - a target whose host suite failed fatally (its Mirror node can never
+   complete) is reported BLOCKED;
  - on timeout or SIGTERM, pending suites are suspended and killed.
 
 Usage (on the HPC, in the project venv):
@@ -18,6 +20,9 @@ Usage (on the HPC, in the project venv):
 from __future__ import annotations
 
 import argparse
+import contextlib
+import ctypes
+import json
 import os
 import signal
 import sys
@@ -42,6 +47,29 @@ TERMINAL_STATES = {"complete", "aborted"}
 # Polls an aborted task must persist with CIMonitor still queued: lets CIMonitor
 # report a ReferenceCheck abort itself and ignores ecFlow's automatic retries.
 ABORT_POLLS = 2
+# A failed check is reported by CIMonitor; dependants still run and are waited for.
+NON_FATAL_TASKS = {"ReferenceCheck"}
+
+
+@contextlib.contextmanager
+def _quiet_fds():
+    """Drop ecFlow's C++ stdout/stderr chatter (hundreds of lines per sync)."""
+    libc = ctypes.CDLL(None)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    libc.fflush(None)
+    saved = (os.dup(1), os.dup(2))
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, 1)
+        os.dup2(devnull, 2)
+        yield
+    finally:
+        libc.fflush(None)
+        os.dup2(saved[0], 1)
+        os.dup2(saved[1], 2)
+        for fd in (*saved, devnull):
+            os.close(fd)
 
 
 @dataclass
@@ -182,23 +210,54 @@ def discover_testbed_targets(config_file: str) -> list[MonitorTarget]:
     return targets
 
 
+def _checks_summary(target: MonitorTarget) -> tuple[str, list]:
+    """(analysis line, failing items) from the casedir's checks/summary.json, if any."""
+    path = os.path.join(target.casedir, "checks", "summary.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            summary = json.load(f)
+    except (OSError, ValueError):
+        return "", []
+    failing = []
+    for task, rules in summary.get("tasks", {}).items():
+        for rule, info in rules.items():
+            for item in info.get("items", []) if isinstance(info, dict) else []:
+                result = str(item.get("result", ""))
+                if not result.startswith("SUCCESS"):
+                    failing.append(
+                        f"{task}/{rule}: {os.path.basename(item.get('test_file', ''))}"
+                        f" - {result.strip().splitlines()[0] if result.strip() else ''}"
+                    )
+    return str(summary.get("analysis", {}).get("result", "")), failing
+
+
 def _read_result(target: MonitorTarget, state: str) -> dict:
-    """Read and echo a terminal target's ci_status.txt, classifying PASS/FAIL."""
+    """Classify a terminal target from ci_status.txt (verdict) + checks/summary.json."""
+    checks, failing = _checks_summary(target)
     try:
         with open(target.status_file, "r", encoding="utf-8") as f:
             content = f.read()
     except FileNotFoundError:
-        detail = f"CIMonitor reached '{state}' but {target.status_file} is missing"
+        seen = "exists" if os.path.isdir(target.casedir) else "NOT visible on this host"
+        detail = (
+            f"CIMonitor reached '{state}' but {target.status_file} is missing "
+            f"(casedir {seen})"
+        )
         print(f"----- {target.name}: {detail} -----")
-        return {"status": "FAIL", "detail": detail}
+        return {"status": "FAIL", "detail": detail, "note": detail}
 
     print(f"----- {target.name}: {target.status_file} -----")
     print(content)
+    if checks:
+        print(f"----- {target.name}: checks/summary.json: {checks} -----")
+    for item in failing:
+        print(f"  failing check: {item}")
 
     last_line = content.strip().splitlines()[-1] if content.strip() else ""
     return {
         "status": "PASS" if last_line == "RESULT=PASS" else "FAIL",
         "detail": content,
+        "note": checks,
     }
 
 
@@ -208,6 +267,11 @@ def _aborted_tasks(server: EcflowServer, suite) -> list:
         for task in server.get_all_tasks(suite)
         if task.get_state() == ecflow.State.aborted
     ]
+
+
+def _fatal(tasks: list) -> list:
+    """Aborted tasks that kill the suite and its dependants (ReferenceCheck does not)."""
+    return [task for task in tasks if task.name() not in NON_FATAL_TASKS]
 
 
 def _task_output(suite, task) -> Optional[tuple[str, str]]:
@@ -255,7 +319,7 @@ def _blocked_reason(
 ) -> Optional[str]:
     """Reason this target can never start, because its host suite failed."""
     host = by_name.get(target.host) if target.host else None
-    if host is None or results.get(host.name, {}).get("status", "PASS") == "PASS":
+    if host is None or not results.get(host.name, {}).get("fatal", False):
         return None
     if target.mirror_path:
         mirrored = defs.find_abs_node(target.mirror_path)
@@ -278,30 +342,38 @@ def watch_targets(
     results: dict[str, dict] = {}
     abort_polls = dict.fromkeys(by_name, 0)
 
+    progress: dict[str, Optional[str]] = {}
+    polls = 0
     while pending:
-        server.ecf_client.sync_local()
+        with _quiet_fds():
+            server.ecf_client.sync_local()
         defs = server.ecf_client.get_defs()
+        polls += 1
 
         for target in list(pending):
             ci_node = defs.find_abs_node(target.ecf_path)
             ci_state = str(ci_node.get_state()) if ci_node is not None else None
+            progress[target.name] = ci_state
+            suite = defs.find_abs_node(target.suite_path)
+            aborted = _aborted_tasks(server, suite) if suite is not None else []
+            fatal = _fatal(aborted)
             if ci_state in TERMINAL_STATES:
                 logger.info("{}: CIMonitor reached '{}'", target.name, ci_state)
-                results[target.name] = _read_result(target, ci_state)
-                if results[target.name]["status"] != "PASS":
+                result = _read_result(target, ci_state)
+                result["fatal"] = bool(fatal)
+                results[target.name] = result
+                if result["status"] != "PASS":
                     _collect_failed_outputs(server, defs, target, failed_outputs)
                 pending.remove(target)
                 continue
 
-            suite = defs.find_abs_node(target.suite_path)
             blocked = _blocked_reason(target, by_name, results, defs)
             reason = None
             if suite is not None:
-                aborted = _aborted_tasks(server, suite)
-                if aborted and ci_state not in ("submitted", "active"):
+                if fatal and ci_state not in ("submitted", "active"):
                     abort_polls[target.name] += 1
                     if abort_polls[target.name] >= ABORT_POLLS:
-                        reason = f"aborted task {aborted[0].get_abs_node_path()}"
+                        reason = f"aborted task {fatal[0].get_abs_node_path()}"
                 else:
                     abort_polls[target.name] = 0
                 if ci_node is None and str(suite.get_state()) == "complete":
@@ -313,18 +385,30 @@ def watch_targets(
             status = "BLOCKED" if blocked is not None else "FAIL"
             note = blocked if blocked is not None else reason
             print(f"----- {target.name}: {status} - {note} -----")
-            results[target.name] = {"status": status, "detail": note, "note": note}
+            results[target.name] = {
+                "status": status,
+                "detail": note,
+                "note": note,
+                "fatal": blocked is not None or bool(fatal),
+            }
             _collect_failed_outputs(server, defs, target, failed_outputs)
             _stop_suite(server, target.suite_path, stopped)
             pending.remove(target)
 
         if not pending:
             break
+        waiting = ", ".join(f"{t.name}={progress.get(t.name)}" for t in pending)
+        print(f"poll {polls}: {len(pending)} pending (CIMonitor state): {waiting}", flush=True)
         if time.time() >= deadline:
             for target in pending:
                 note = f"TIMEOUT waiting for {target.ecf_path} to reach a terminal state"
                 print(f"----- {target.name}: {note} -----")
-                results[target.name] = {"status": "TIMEOUT", "detail": note, "note": note}
+                results[target.name] = {
+                    "status": "TIMEOUT",
+                    "detail": note,
+                    "note": note,
+                    "fatal": True,
+                }
                 _collect_failed_outputs(server, defs, target, failed_outputs)
                 _stop_suite(server, target.suite_path, stopped)
             pending.clear()
