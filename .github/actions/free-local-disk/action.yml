@@ -14,11 +14,16 @@ runs:
       shell: bash
       run: |
         set +e
-        # .venv may be a symlink into $SCRATCH (see setup-venv-scratch) -
-        # free the real target too.
+        # .venv may be a symlink into $SCRATCH (see setup-venv-scratch),
+        # only mounted on the HPC side - free the real target over ssh.
+        # Plain readlink (not -f): just reads the link text, no local
+        # access to the target needed.
         if [ -L .venv ]; then
-          real_venv=$(readlink -f .venv)
-          [ -n "$real_venv" ] && rm -rf "$real_venv"
+          real_venv=$(readlink .venv)
+          if [ -n "$real_venv" ]; then
+            source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
+            helper_exec "rm -rf '$real_venv'"
+          fi
         fi
         rm -rf .venv
         rm -f ci_artifact_casedirs.txt ${{ inputs.extra_patterns }}

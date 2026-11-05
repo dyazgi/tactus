@@ -10,17 +10,17 @@ runs:
         set -euo pipefail
         source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
 
-        scratch="${SCRATCH:-}"
+        # $SCRATCH is only mounted on the HPC side, not this runner -
+        # resolve and create the target there, over ssh.
+        scratch=$(helper_getVar SCRATCH)
         if [ -z "$scratch" ]; then
-          scratch=$(helper_getVar SCRATCH)
-        fi
-        if [ -z "$scratch" ]; then
-          echo "::warning::Could not resolve \$SCRATCH - leaving .venv on this runner's own disk."
+          echo "::warning::Could not resolve \$SCRATCH via hpc-batch - leaving .venv on this runner's own disk."
           exit 0
         fi
 
         venv_target="$scratch/tactus/github-runner/$GITHUB_RUN_ID/.venv"
-        rm -rf "$venv_target"
-        mkdir -p "$venv_target"  # must exist before the symlink, or venv creation fails through it
+        # Must exist before the symlink, or venv creation fails through it.
+        helper_exec "rm -rf '$venv_target' && mkdir -p '$venv_target'"
+
         rm -rf .venv
         ln -s "$venv_target" .venv
