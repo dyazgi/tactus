@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for the pure-logic parts of `scripts/ci/monitor_suite.py`.
-
-`scripts/ci/monitor_suite.py` is a standalone script (not part of the `tactus`
-package), so it is loaded here via `importlib` rather than a normal import.
-"""
+"""Unit tests for `scripts/ci/monitor_suite.py`."""
 
 import importlib.util
 import sys
@@ -17,7 +13,7 @@ _SPEC.loader.exec_module(monitor_suite)
 
 
 class _FakeServer:
-    """Fake `EcflowServer` returning canned states/recording suspend() calls."""
+    """Fake `EcflowServer`."""
 
     def __init__(self, states_by_path):
         self.states_by_path = dict(states_by_path)
@@ -31,7 +27,7 @@ class _FakeServer:
 
 
 class TestPollTargets:
-    """Unit tests for `poll_targets()`."""
+    """Tests for `poll_targets()`."""
 
     def test_all_terminal_on_first_poll(self):
         targets = [
@@ -50,7 +46,6 @@ class TestPollTargets:
         targets = [monitor_suite.MonitorTarget("a", "/a/CIMonitor", "unused")]
         server = _FakeServer({"/a/CIMonitor": "queued"})
 
-        # Deadline already in the past -> single poll round, then give up.
         states = monitor_suite.poll_targets(
             server, targets, poll_interval_seconds=0, deadline=0
         )
@@ -59,7 +54,7 @@ class TestPollTargets:
 
     def test_unknown_node_is_treated_as_pending(self):
         targets = [monitor_suite.MonitorTarget("a", "/a/CIMonitor", "unused")]
-        server = _FakeServer({})  # get_node_state() returns None: node not found (yet)
+        server = _FakeServer({})
 
         states = monitor_suite.poll_targets(
             server, targets, poll_interval_seconds=0, deadline=0
@@ -69,7 +64,7 @@ class TestPollTargets:
 
 
 class TestReadResults:
-    """Unit tests for `read_results()`."""
+    """Tests for `read_results()`."""
 
     def test_pass(self, tmp_path, capsys):
         status_file = tmp_path / "ci_status.txt"
@@ -110,7 +105,7 @@ class TestReadResults:
 
 
 class TestWriteStepSummary:
-    """Unit tests for `write_step_summary()`."""
+    """Tests for `write_step_summary()`."""
 
     def test_writes_to_github_step_summary_when_set(self, tmp_path, monkeypatch):
         summary_file = tmp_path / "summary.md"
@@ -134,7 +129,7 @@ class TestWriteStepSummary:
 
 
 class TestCasedir:
-    """Unit tests for `MonitorTarget.casedir`."""
+    """Tests for `MonitorTarget.casedir`."""
 
     def test_casedir_is_status_file_dirname(self):
         target = monitor_suite.MonitorTarget(
@@ -145,7 +140,7 @@ class TestCasedir:
 
 
 class TestWriteArtifactManifest:
-    """Unit tests for `write_artifact_manifest()`."""
+    """Tests for `write_artifact_manifest()`."""
 
     def test_writes_one_casedir_per_line(self, tmp_path):
         targets = [
@@ -166,7 +161,6 @@ class TestWriteArtifactManifest:
         ]
 
     def test_deduplicates_casedirs_preserving_order(self, tmp_path):
-        # e.g. a compile suite's R64/R32 legs sharing one casedir.
         targets = [
             monitor_suite.MonitorTarget(
                 "compile:R64", "/x/CIMonitor", "/scratch/CASE/ci_status.txt"
@@ -190,7 +184,7 @@ class TestWriteArtifactManifest:
 
 
 class TestSuspendTargets:
-    """Unit tests for `_suspend_targets()`/`_suspend_one()`."""
+    """Tests for `_suspend_targets()`."""
 
     def test_suspends_every_target(self):
         targets = [
@@ -217,8 +211,6 @@ class TestSuspendTargets:
 
         server = _FlakyServer({})
 
-        # `/a/CIMonitor` failing to suspend must not stop `/b/CIMonitor` from
-        # being attempted too.
         monitor_suite._suspend_targets(server, targets)
 
         assert server.suspended == ["/b/CIMonitor"]

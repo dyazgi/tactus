@@ -1,21 +1,5 @@
 #!/usr/bin/env python3
-"""Poll a tactus-submitted suite's CIMonitor task(s) and summarize PASS/FAIL for CI.
-
-Run after `tactus compile`/`tactus test -c <config> -m -r`. Exit code is 0 iff
-every target reported RESULT=PASS. Never waits forever on a dead target:
- - a suite with an aborted task (CIMonitor still queued after ABORT_POLLS polls)
-   is suspended, its running jobs are killed and it is reported FAIL;
-   a failed ReferenceCheck is the exception: CIMonitor reports it and the
-   dependants still run and are waited for;
- - a target whose host suite failed fatally (its Mirror node can never
-   complete) is reported BLOCKED;
- - on timeout or SIGTERM, pending suites are suspended and killed.
-
-Usage (on the HPC, in the project venv):
-    python3 scripts/ci/monitor_suite.py --mode compile --config <compile_config.toml>
-    python3 scripts/ci/monitor_suite.py --mode testbed --config <test_runner_config.toml>
-    python3 scripts/ci/monitor_suite.py --mode ... --config ... --print-suites
-"""
+"""Poll CIMonitor tasks of submitted suites; exit 0 iff all report PASS."""
 
 from __future__ import annotations
 
@@ -44,16 +28,13 @@ from tactus.toolbox import Platform
 logger.enable(GeneralConstants.PACKAGE_NAME)
 
 TERMINAL_STATES = {"complete", "aborted"}
-# Polls an aborted task must persist with CIMonitor still queued: lets CIMonitor
-# report a ReferenceCheck abort itself and ignores ecFlow's automatic retries.
-ABORT_POLLS = 2
-# A failed check is reported by CIMonitor; dependants still run and are waited for.
-NON_FATAL_TASKS = {"ReferenceCheck"}
+ABORT_POLLS = 2  # outlasts ecFlow retries and lets CIMonitor report first
+NON_FATAL_TASKS = {"ReferenceCheck"}  # dependants still run
 
 
 @contextlib.contextmanager
 def _quiet_fds():
-    """Drop ecFlow's C++ stdout/stderr chatter (hundreds of lines per sync)."""
+    """Silence ecFlow's C++ output."""
     libc = ctypes.CDLL(None)
     sys.stdout.flush()
     sys.stderr.flush()
@@ -74,60 +55,42 @@ def _quiet_fds():
 
 @dataclass
 class MonitorTarget:
-    """One CIMonitor task to poll, and where to read its result."""
+    """One CIMonitor task to poll."""
 
     name: str
     ecf_path: str
     status_file: str
-    # Fully-resolved config this target came from - unlike the top-level
-    # --config (for --mode testbed), this one carries [platform]/[system],
-    # so it's safe to build an EcflowServer from it.
-    config_file: str = ""
-    # Target whose suite this one's Mirror node waits on, and the node it mirrors.
+    config_file: str = ""  # per-case config; has [platform]/[system]
     host: Optional[str] = None
     mirror_path: Optional[str] = None
 
     @property
     def casedir(self) -> str:
-        """Resolved @CASEDIR@ this target's result files live under."""
         return os.path.dirname(self.status_file)
 
     @property
     def suite_path(self) -> str:
-        """Absolute ecFlow path of the suite this target belongs to."""
         return "/" + self.ecf_path.split("/")[1]
 
 
 def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
-    """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Follow a tactus suite's CIMonitor checkpoint(s) and summarize."
-    )
+    parser = argparse.ArgumentParser(description="Follow CIMonitor tasks and summarize.")
     parser.add_argument("--mode", choices=["compile", "testbed"], required=True)
     parser.add_argument("--config", required=True)
     parser.add_argument("--poll-interval-seconds", type=int, default=60)
     parser.add_argument("--timeout-minutes", type=int, default=240)
+    parser.add_argument("--artifact-manifest", default=None, help="Casedir list file.")
     parser.add_argument(
-        "--artifact-manifest",
-        default=None,
-        help="If given, write each target's @CASEDIR@ (deduplicated) to this file.",
+        "--failed-outputs-manifest", default=None, help="Aborted-task output list file."
     )
     parser.add_argument(
-        "--failed-outputs-manifest",
-        default=None,
-        help="If given, write '<output file>\\t<relative name>' of every aborted "
-        "task's job output to this file.",
-    )
-    parser.add_argument(
-        "--print-suites",
-        action="store_true",
-        help="Only print the ecFlow suite name of each target, then exit.",
+        "--print-suites", action="store_true", help="Print suite names and exit."
     )
     return parser.parse_args(argv)
 
 
 def _resolve_casedir(config: ParsedConfig) -> str:
-    # Date macros (@YMD_START@) in system.casedir need the case start time, as in the task.
+    # @YMD_START@ in casedir needs the start time.
     start = config.get("general.times.start", None)
     return Platform(config).substitute(
         config["system.casedir"], basetime=start, validtime=start
@@ -135,7 +98,7 @@ def _resolve_casedir(config: ParsedConfig) -> str:
 
 
 def discover_compile_targets(config_file: str) -> list[MonitorTarget]:
-    """One target per precision leg (R64, and R32 if submission.precision == R32)."""
+    """One target per precision leg."""
     config = ParsedConfig.from_file(config_file, json_schema={})
     platform = Platform(config)
     case_name = platform.substitute(config.get("general.case"))
@@ -162,7 +125,7 @@ def discover_compile_targets(config_file: str) -> list[MonitorTarget]:
 def _mirror_of(
     test_cases: TestCases, case: str, case_config: ParsedConfig, config_names: dict
 ) -> tuple[Optional[str], Optional[str]]:
-    """Return (host target name, mirrored node path) if this case waits on its host."""
+    """(host target, mirrored node path) if the case waits on its host."""
     host = test_cases.cases.get(case, {}).get("host")
     if host not in config_names or not case_config.get(
         "suite_control.mirror_suite", False
@@ -175,14 +138,14 @@ def _mirror_of(
             basetime=start,
             validtime=start,
         )
-    except Exception:  # noqa: BLE001 - best effort: fall back to host-only blocking
+    except Exception:  # noqa: BLE001
         logger.exception("Could not resolve the mirrored node of {}", case)
         path = None
     return host, path
 
 
 def discover_testbed_targets(config_file: str) -> list[MonitorTarget]:
-    """One target per case selected by the test-runner config."""
+    """One target per selected case."""
     args = argparse.Namespace(
         config_file=config_file, verbose=False, dry=False, generate_refs=False
     )
@@ -215,7 +178,7 @@ def discover_testbed_targets(config_file: str) -> list[MonitorTarget]:
 
 
 def _checks_summary(target: MonitorTarget) -> tuple[str, list]:
-    """(analysis line, failing items) from the casedir's checks/summary.json, if any."""
+    """(analysis line, failing items) from checks/summary.json."""
     path = os.path.join(target.casedir, "checks", "summary.json")
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -236,7 +199,7 @@ def _checks_summary(target: MonitorTarget) -> tuple[str, list]:
 
 
 def _read_result(target: MonitorTarget, state: str) -> dict:
-    """Classify a terminal target from ci_status.txt (verdict) + checks/summary.json."""
+    """Verdict from ci_status.txt, note from checks/summary.json."""
     checks, failing = _checks_summary(target)
     try:
         with open(target.status_file, "r", encoding="utf-8") as f:
@@ -274,16 +237,16 @@ def _aborted_tasks(server: EcflowServer, suite) -> list:
 
 
 def _fatal(tasks: list) -> list:
-    """Aborted tasks that kill the suite and its dependants (ReferenceCheck does not)."""
+    """Aborted tasks that kill the suite and its dependants."""
     return [task for task in tasks if task.name() not in NON_FATAL_TASKS]
 
 
 def _task_output(suite, task) -> Optional[tuple[str, str]]:
-    """(job output file, relative name) of a task's latest try, if resolvable."""
+    """(job output file, relative name) of a task's latest try."""
     try:
         jobout = suite.find_variable("ECF_JOBOUT").value()
         tryno = task.find_gen_variable("ECF_TRYNO").value()
-    except Exception:  # noqa: BLE001 - best effort
+    except Exception:  # noqa: BLE001
         logger.exception("Could not resolve job output of {}", task.get_abs_node_path())
         return None
     if not jobout:
@@ -306,7 +269,7 @@ def _collect_failed_outputs(
 
 
 def _stop_suite(server: EcflowServer, suite_path: str, stopped: set) -> None:
-    """Suspend a suite (no new submissions) and kill its running jobs, once."""
+    """Suspend a suite and kill its running jobs, once."""
     if suite_path in stopped:
         return
     stopped.add(suite_path)
@@ -321,7 +284,7 @@ def _stop_suite(server: EcflowServer, suite_path: str, stopped: set) -> None:
 def _blocked_reason(
     target: MonitorTarget, by_name: dict, results: dict, defs
 ) -> Optional[str]:
-    """Reason this target can never start, because its host suite failed."""
+    """Why the target can never start: its host failed."""
     host = by_name.get(target.host) if target.host else None
     if host is None or not results.get(host.name, {}).get("fatal", False):
         return None
@@ -341,7 +304,7 @@ def watch_targets(
     stopped: set,
     failed_outputs: dict,
 ) -> dict[str, dict]:
-    """Poll until every target has a result: terminal, dead, blocked or timed out."""
+    """Poll until every target is terminal, dead, blocked or timed out."""
     by_name = {target.name: target for target in targets}
     results: dict[str, dict] = {}
     abort_polls = dict.fromkeys(by_name, 0)
@@ -423,7 +386,7 @@ def watch_targets(
 
 
 def write_step_summary(results: dict[str, dict]) -> None:
-    """Write a markdown PASS/FAIL table to $GITHUB_STEP_SUMMARY, or stdout."""
+    """Write a markdown table to $GITHUB_STEP_SUMMARY, or stdout."""
     lines = [
         "## tactus CI monitor summary",
         "",
@@ -445,7 +408,7 @@ def write_step_summary(results: dict[str, dict]) -> None:
 
 
 def write_artifact_manifest(targets: list[MonitorTarget], manifest_path: str) -> None:
-    """Write each target's casedir (deduplicated) to a file, one per line."""
+    """Write the unique casedirs, one per line."""
     casedirs = list(dict.fromkeys(target.casedir for target in targets))
     with open(manifest_path, "w", encoding="utf-8") as f:
         f.write("\n".join(casedirs) + ("\n" if casedirs else ""))
@@ -455,7 +418,7 @@ def write_artifact_manifest(targets: list[MonitorTarget], manifest_path: str) ->
 
 
 def write_failed_outputs_manifest(failed_outputs: dict, manifest_path: str) -> None:
-    """Write '<output file>\\t<relative name>' per aborted task, one per line."""
+    """Write '<output file>\\t<name>' per aborted task."""
     with open(manifest_path, "w", encoding="utf-8") as f:
         for path, rel in failed_outputs.items():
             f.write(f"{path}\t{rel}\n")
@@ -465,7 +428,6 @@ def write_failed_outputs_manifest(failed_outputs: dict, manifest_path: str) -> N
 
 
 def main(argv: Optional[list] = None) -> int:
-    """Entry point."""
     args = parse_args(argv)
 
     if args.mode == "compile":
@@ -482,8 +444,6 @@ def main(argv: Optional[list] = None) -> int:
         logger.warning("No targets to monitor for {}", args.config)
         return 0
 
-    # EcflowServer needs [platform]/[system] - args.config (for --mode
-    # testbed) doesn't have those, so reuse a target's own resolved config.
     server_config = ParsedConfig.from_file(targets[0].config_file, json_schema={})
     server = EcflowServer(server_config)
     pending = list(targets)

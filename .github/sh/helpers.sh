@@ -1,11 +1,7 @@
-# Shared bash helpers for self-hosted CI (adapted from the HARMONIE
-# self-hosted CI's helpers.sh).
-
 function log_msq(){
     echo "--MESSAGE--: " $@
 }
 
-# Keepalive: the monitor holds one ssh session open for hours.
 function helper_ssh(){
     ssh -o ServerAliveInterval=60 -o ServerAliveCountMax=10 hpc-batch "$@"
 }
@@ -25,15 +21,12 @@ function helper_exec(){
     helper_ssh "$cmd"
 }
 
-# helper_exec with python3/ecflow modules loaded.
 function helper_ml_exec(){
     local  cmd=$1
     helper_ssh "module load python3/3.10.10-01; module load ecflow; $cmd"
 }
 
-# The runner has no python/module/$SCRATCH: run every poetry/python command
-# through this. Runs "$@" on hpc-batch in the caller's $PWD, with the
-# project .venv (once it exists) activated.
+# Runs "$@" on hpc-batch in $PWD with .venv activated.
 function helper_py_exec(){
     local args
     printf -v args '%q ' "$@"
@@ -45,7 +38,6 @@ function helper_getVar(){
     helper_ssh "echo \$$varname"
 }
 
-# Prints ial_tag+ial_git_version (at most one may be set); errors if both are.
 function ci_resolve_ial_ref(){
     local  ial_tag=$1
     local  ial_git_version=$2

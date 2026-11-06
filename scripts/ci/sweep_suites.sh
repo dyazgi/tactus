@@ -1,12 +1,6 @@
 #!/bin/bash
-# Force-removes every ecFlow suite whose name starts with a given prefix
-# (via ecflow_client, no python/poetry needed). Safety net for `tactus
-# remove` leaving suites behind on crash. Only removes suite nodes, not
-# their ECF_HOME/ECF_OUT job logs.
-#
-# Usage: scripts/ci/sweep_suites.sh <suite-name-prefix>
-#        scripts/ci/sweep_suites.sh --cancel <suite-name>...
-#   --cancel: suspend the named suites and kill their running jobs (no delete).
+# Usage: sweep_suites.sh <suite-prefix>          force-delete matching suites
+#        sweep_suites.sh --cancel <suite>...     suspend and kill, no delete
 
 set -uo pipefail
 

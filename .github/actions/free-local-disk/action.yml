@@ -1,9 +1,9 @@
 name: Free local disk (poetry venv + cache)
-description: Removes .venv (and its $SCRATCH target), poetry cache, CI files, GitHub token from hpc-batch git config
+description: Remove .venv, poetry cache, CI files and the git token
 
 inputs:
   extra_patterns:
-    description: Extra space-separated glob patterns to remove
+    description: Extra globs to remove
     required: false
     default: ""
 
@@ -15,7 +15,6 @@ runs:
       run: |
         set +e
         source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
-        # .venv may be a symlink into $SCRATCH - free the real target over ssh.
         if [ -L .venv ]; then
           real_venv=$(readlink .venv)
           if [ -n "$real_venv" ]; then
@@ -24,7 +23,6 @@ runs:
         fi
         rm -rf .venv ci_artifacts
         rm -f ci_artifact_casedirs.txt ci_failed_outputs.txt ci_step_summary.md ci_monitor_target.txt ${{ inputs.extra_patterns }}
-        # Poetry cache and git token live on hpc-batch.
         cache_dir=$(helper_py_exec poetry config cache-dir 2>/dev/null)
         [ -n "$cache_dir" ] && helper_exec "rm -rf '$cache_dir'"
         helper_exec "git config --global --get-regexp '^url\..*@github\.com/\.insteadof\$' | cut -d' ' -f1 | sed 's/\.insteadof\$//' | while read -r s; do git config --global --remove-section \"\$s\"; done"

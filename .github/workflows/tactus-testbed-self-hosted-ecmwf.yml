@@ -1,7 +1,5 @@
-#.github/workflows/tactus-testbed-self-hosted-ecmwf.yml
 name: Tactus Testbed (self-hosted ECMWF)
 
-# Runs on push with "--action-testbed" in the commit message, or manual dispatch.
 on:
   push:
   workflow_dispatch:
@@ -25,12 +23,10 @@ on:
 
 env:
   GITHUB_TOKEN: ${{ secrets.GH_REPO_READ_TOKEN }}
-  # Empty unless set: no account override, identical to a manual `tactus test`/`compile` run.
   TACTUS_WLM_ACCOUNT: ${{ vars.TACTUS_WLM_ACCOUNT }}
   TACTUS_POLL_INTERVAL_SECONDS: ${{ vars.TACTUS_POLL_INTERVAL_SECONDS }}
   TACTUS_SUITE_TIMEOUT_MINUTES: ${{ vars.TACTUS_SUITE_TIMEOUT_MINUTES }}
 
-# Testbed cases share scratch/reference-experiment state, so serialize all runs.
 concurrency:
   group: tactus-testbed-ci
   cancel-in-progress: false
@@ -103,7 +99,6 @@ jobs:
           if-no-files-found: warn
 
       - name: Cleanup compile sub-step
-        # Opt-in: set repo/org var TACTUS_ECF_SUITES_AUTO_CLEANUP=true to auto-remove.
         if: always() && steps.resolve.outputs.should_compile == 'true' && vars.TACTUS_ECF_SUITES_AUTO_CLEANUP == 'true'
         uses: ./.github/actions/cleanup-tactus-run
         with:
@@ -132,7 +127,6 @@ jobs:
           if-no-files-found: warn
 
       - name: Cleanup
-        # Opt-in: set repo/org var TACTUS_ECF_SUITES_AUTO_CLEANUP=true to auto-remove.
         if: always() && vars.TACTUS_ECF_SUITES_AUTO_CLEANUP == 'true'
         uses: ./.github/actions/cleanup-tactus-run
         with:
@@ -150,5 +144,3 @@ jobs:
         uses: ./.github/actions/free-local-disk
         with:
           extra_patterns: ci_run_*.toml
-
-#

@@ -1,20 +1,20 @@
 name: Monitor tactus suite
-description: Polls a submitted suite until terminal/timeout and summarizes PASS/FAIL
+description: Follow submitted suites and summarize
 
 inputs:
   mode:
     description: compile or testbed
     required: true
   config_file:
-    description: Resolved config file to monitor
+    description: Config to monitor
     required: true
   default_timeout_minutes:
-    description: Fallback timeout if TACTUS_SUITE_TIMEOUT_MINUTES isn't set
+    description: Timeout when TACTUS_SUITE_TIMEOUT_MINUTES is unset
     required: true
 
 outputs:
   artifact_paths:
-    description: Workspace glob of the staged status files and failed-task outputs
+    description: Staged artifact glob
     value: ${{ steps.monitor.outputs.artifact_paths }}
   status:
     description: PASS or FAIL
@@ -30,10 +30,8 @@ runs:
         set -o pipefail
         source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
         rm -f ci_artifact_casedirs.txt ci_failed_outputs.txt ci_step_summary.md
-        # Read by the cancel action.
         printf '%s\n' "${{ inputs.mode }}" "${{ inputs.config_file }}" > ci_monitor_target.txt
         set +e
-        # Runs on hpc-batch (env vars don't cross ssh): summary goes to a workspace file.
         helper_py_exec env GITHUB_STEP_SUMMARY="$GITHUB_WORKSPACE/ci_step_summary.md" \
           python3 scripts/ci/monitor_suite.py \
           --mode "${{ inputs.mode }}" \
@@ -49,10 +47,8 @@ runs:
           cat ci_step_summary.md >> "$GITHUB_STEP_SUMMARY"
         fi
 
-        # Manifest may be missing if monitor_suite.py crashed.
         artifact_paths=""
         if [ -f ci_artifact_casedirs.txt ]; then
-          # Casedirs and job output are on HPC-only disks: stage the small files into the workspace.
           helper_exec "cd '$PWD' && bash .github/sh/stage_artifacts.sh ci_artifact_casedirs.txt ci_failed_outputs.txt ci_artifacts" || true
           artifact_paths="ci_artifacts/**"
         fi

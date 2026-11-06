@@ -426,24 +426,7 @@ class EcflowNode:
         )
 
     def add_always_trigger(self, upstream_node: "EcflowNode") -> None:
-        """Trigger this node once `upstream_node` reaches `complete` OR `aborted`.
-
-        ecFlow tasks, by default, never run if a node they depend on aborted -- a
-        trigger only becomes true once the referenced node reaches the exact
-        state named in the expression (`== complete`, the implicit default used
-        everywhere else in this module, via :class:`EcflowSuiteTrigger`). Some
-        "checkpoint"/report tasks (e.g. `tactus.tasks.monitor.CIMonitor`) must run
-        regardless of whether the node they are checking on succeeded or failed,
-        so they need an explicit `... == complete or ... == aborted` trigger
-        expression instead. This is the minimal correct way to express that in
-        ecFlow's trigger language (there is no single built-in "terminal state"
-        to trigger on).
-
-        Args:
-            upstream_node (EcflowNode): The node whose completion (successful or
-                not) should trigger this node.
-
-        """
+        """Trigger this node once `upstream_node` is `complete` or `aborted`."""
         if self.ecf_node is None:
             return
         trigger_string = (

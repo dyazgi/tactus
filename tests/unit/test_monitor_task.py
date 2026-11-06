@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for the `CIMonitor` task (`tactus.tasks.monitor`)."""
+"""Unit tests for `CIMonitor`."""
 
 import json
 from pathlib import Path
@@ -13,7 +13,7 @@ from tactus.tasks.monitor import CIMonitor
 
 @pytest.fixture(scope="module")
 def basic_config(tmp_directory: str, default_config: ParsedConfig):
-    """A resolvable config with a distinct scratch/casedir per test module."""
+    """Config with a per-module scratch dir."""
     config = default_config.copy(update=set_times(default_config))
     return config.copy(
         update={
@@ -26,7 +26,7 @@ def basic_config(tmp_directory: str, default_config: ParsedConfig):
 
 
 def _config_for_case(basic_config: ParsedConfig, case_name: str, context: str, **args):
-    """Build a config for `case_name` with `task.args.context` (and extras) set."""
+    """Config for `case_name` with `task.args` set."""
     all_args = {"context": context, **args}
     args_string = ";".join(f"{key}={value}" for key, value in all_args.items())
     return basic_config.copy(
@@ -38,7 +38,7 @@ def _config_for_case(basic_config: ParsedConfig, case_name: str, context: str, *
 
 
 class TestCIMonitorTestbedContext:
-    """Unit tests for the `testbed` context (default): reuses the summary.json."""
+    """Tests for the `testbed` context."""
 
     def test_writes_pass_when_summary_analysis_succeeded(self, basic_config, tmp_path):
         config, _ = _config_for_case(basic_config, "case_pass", context="testbed")
@@ -117,7 +117,7 @@ class TestCIMonitorTestbedContext:
 
 
 class TestCIMonitorCompileContext:
-    """Unit tests for the `compile` context: reuses ecFlow's own task state."""
+    """Tests for the `compile` context."""
 
     def test_writes_pass_when_build_task_completed(self, basic_config, monkeypatch):
         config, _ = _config_for_case(

@@ -2168,11 +2168,6 @@ class CompilationFamily(EcflowSuiteFamily):
                 },
                 trigger=EcflowSuiteTriggers(EcflowSuiteTrigger(create_bundle)),
             )
-            # CIMonitor writes the compile suite's ci_status.txt for this precision
-            # leg. It must run whether the build completed or aborted (see
-            # `EcflowNode.add_always_trigger`), so it is wired up manually below
-            # rather than via the `trigger=` constructor argument (which only
-            # supports the implicit `== complete` trigger mode).
             ci_monitor = EcflowSuiteTask(
                 "CIMonitor",
                 prec_familiy,

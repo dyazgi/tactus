@@ -1,31 +1,31 @@
 name: Run tactus testbed
-description: Configures, starts, follows and collects a tactus integration test suite
+description: Run the tactus testbed
 
 inputs:
   test_config:
-    description: Path to the test-suite config (relative to repo root)
+    description: Test-suite config
     required: true
   case_selection:
-    description: Comma-separated case names to restrict to (empty = every case)
+    description: Comma-separated cases (empty = all)
     required: false
     default: ""
   ial_version:
-    description: submission.ial_version to force on every case (empty = leave default)
+    description: submission.ial_version override
     required: false
     default: ""
 
 outputs:
   test_dir:
-    description: Directory containing the generated per-case config.toml files
+    description: Per-case config directory
     value: ${{ steps.configure.outputs.test_dir }}
   run_tag:
-    description: Unique [general].tag injected into every case this run
+    description: Tag injected into every case
     value: ${{ steps.configure.outputs.run_tag }}
   resolved_config:
-    description: The top-level test-runner config file this run generated
+    description: Generated test config
     value: ${{ steps.configure.outputs.resolved_config }}
   artifact_paths:
-    description: Workspace glob of the staged status files and failed-task outputs
+    description: Staged artifact glob
     value: ${{ steps.follow.outputs.artifact_paths }}
   status:
     description: PASS or FAIL
@@ -40,14 +40,6 @@ runs:
       run: |
         set -euo pipefail
         source "$GITHUB_WORKSPACE/.github/sh/helpers.sh"
-        # [general].tag must be set before `tactus test -m` resolves
-        # host=-dependencies, so suite/casedir names stay consistent.
-        # CI overrides (account/ial_version) go via [general].extra, the
-        # same config-mods mechanism `tactus case` uses natively. No QOS
-        # override: every submission type already has a correct default,
-        # and forcing one broke many-way MPI tasks before. Account is a
-        # literal value, not an @MACRO@, so an unset TACTUS_WLM_ACCOUNT
-        # generates no override file at all.
         config_file="ci_run_$(basename "${{ inputs.test_config }}")"
         safe_branch=$(echo "${{ github.ref_name }}" | tr -c 'A-Za-z0-9._-' '_')
         run_tag="${safe_branch}_${{ github.run_id }}_${{ github.run_attempt }}"

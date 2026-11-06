@@ -1,7 +1,5 @@
 #!/bin/bash
-# Runs on hpc-batch. Stages the small CI artifacts into $3:
-#   <case>/ci_status.txt, <case>/checks/summary.*   from each casedir listed in $1
-#   failed_tasks/<suite>/<family>/<task>.<try>      last 512K of each "<file><TAB><name>" in $2
+# Usage (on hpc-batch): stage_artifacts.sh <casedirs> <failed-outputs> <dest>
 set -uo pipefail
 casedirs=$1
 failed=$2

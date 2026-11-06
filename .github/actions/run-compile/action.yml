@@ -1,21 +1,21 @@
 name: Run tactus compile
-description: Runs 'tactus compile' for one IAL tag and reports the result to GitHub
+description: Run tactus compile for one IAL ref
 
 inputs:
   ial_tag:
-    description: IAL git tag/branch to compile
+    description: IAL ref
     required: true
   dry_run:
-    description: Only generate the compile config, do not submit
+    description: Only generate the config
     required: false
     default: "false"
 
 outputs:
   config_file:
-    description: Path to the generated compile config.toml
+    description: Generated compile config
     value: ${{ steps.run.outputs.config_file }}
   artifact_paths:
-    description: Workspace glob of the staged status files and failed-task outputs
+    description: Staged artifact glob
     value: ${{ steps.summary.outputs.artifact_paths }}
   status:
     description: PASS or FAIL
@@ -39,8 +39,6 @@ runs:
         echo "config_file=$config_file" >> "$GITHUB_OUTPUT"
 
     - name: Apply CI submission overrides to generated compile config
-      # No TACTUS_WLM_QOS: forcing one QOS across every submission type
-      # previously broke many-way MPI tasks (wrong processor limit).
       if: env.TACTUS_WLM_ACCOUNT != ''
       shell: bash
       run: |

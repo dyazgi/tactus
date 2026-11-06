@@ -1,5 +1,5 @@
 name: Ensure poetry on HPC
-description: Fails fast if poetry is missing on hpc-batch (installed once by hand)
+description: Fail if poetry is missing on hpc-batch
 
 runs:
   using: composite

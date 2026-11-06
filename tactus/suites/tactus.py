@@ -183,12 +183,6 @@ class TactusSuiteDefinition(SuiteDefinition):
                 trigger=final_cleaning_trigger,
                 ecf_files_remotely=self.ecf_files_remotely,
             )
-            # CIMonitor writes this case's ci_status.txt. It must run whether
-            # ReferenceCheck completed or aborted (a real test FAILURE makes
-            # ReferenceCheck itself abort -- see
-            # `ReferenceCheckManager.analyze_summaries`), so it is wired up
-            # manually below rather than via the `trigger=` constructor argument
-            # (which only supports the implicit `== complete` trigger mode).
             ci_monitor = EcflowSuiteTask(
                 "CIMonitor",
                 self.suite,

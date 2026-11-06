@@ -1,18 +1,16 @@
 name: Cleanup tactus CI run
-description: Removes ecFlow suites and ephemeral on-disk artifacts for a tactus CI run
-
-# Leaves persistent paths (install dir, reference-experiment scratch) untouched.
+description: Remove ecFlow suites and ephemeral files of a CI run
 
 inputs:
   scope:
     description: "compile or testbed"
     required: true
   config_file:
-    description: Generated compile config.toml (scope=compile)
+    description: Compile config (scope=compile)
     required: false
     default: ""
   test_dir:
-    description: Directory of generated per-case config.toml files (scope=testbed)
+    description: Per-case config directory (scope=testbed)
     required: false
     default: ""
 

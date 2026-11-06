@@ -1,6 +1,6 @@
 [general]
   reference_date = "2026-06-18T00:00:00Z"
-  # Small CI smoke-test subset of atos_bologna_CY49t2.toml's full selection.
+  # CI subset
   selection = [
     #"cy49t2_alaro_climate_files",
     #"cy49t2_alaro",

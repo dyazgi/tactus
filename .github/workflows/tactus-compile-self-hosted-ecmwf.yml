@@ -1,7 +1,5 @@
-#.github/workflows/tactus-compile-self-hosted-ecmwf.yml
 name: Tactus Compile (self-hosted ECMWF)
 
-# Runs on push with "--action-compile" in the commit message, or manual dispatch.
 on:
   push:
   workflow_dispatch:
@@ -21,12 +19,10 @@ on:
 
 env:
   GITHUB_TOKEN: ${{ secrets.GH_REPO_READ_TOKEN }}
-  # Empty unless set: no account override, identical to a manual `tactus compile` run.
   TACTUS_WLM_ACCOUNT: ${{ vars.TACTUS_WLM_ACCOUNT }}
   TACTUS_POLL_INTERVAL_SECONDS: ${{ vars.TACTUS_POLL_INTERVAL_SECONDS }}
   TACTUS_SUITE_TIMEOUT_MINUTES: ${{ vars.TACTUS_SUITE_TIMEOUT_MINUTES }}
 
-# One compile per branch at a time.
 concurrency:
   group: tactus-compile-${{ github.ref_name }}
   cancel-in-progress: false
@@ -97,7 +93,6 @@ jobs:
           if-no-files-found: warn
 
       - name: Cleanup
-        # Opt-in: set repo/org var TACTUS_ECF_SUITES_AUTO_CLEANUP=true to auto-remove.
         if: always() && vars.TACTUS_ECF_SUITES_AUTO_CLEANUP == 'true'
         uses: ./.github/actions/cleanup-tactus-run
         with:
