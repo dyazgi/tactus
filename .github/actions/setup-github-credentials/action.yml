@@ -1,5 +1,5 @@
 name: Setup GitHub Credentials
-description: Set up git config (on hpc-batch) to use the token for GitHub URLs
+description: Sets up git config to use token for GitHub URLs (on hpc-batch)
 
 inputs:
   github_token:
